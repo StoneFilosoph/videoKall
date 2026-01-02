@@ -11,6 +11,7 @@ class VideoKall {
 		this.iceServers = [];
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
+		this.facingMode = 'user'; // 'user' = front, 'environment' = back
 		
 		// Queue for ICE candidates that arrive before remote description is set
 		this.pendingIceCandidates = [];
@@ -48,6 +49,7 @@ class VideoKall {
 			connectionStatus: document.getElementById('connection-status'),
 			toggleAudioBtn: document.getElementById('toggle-audio-btn'),
 			toggleVideoBtn: document.getElementById('toggle-video-btn'),
+			switchCameraBtn: document.getElementById('switch-camera-btn'),
 			hangUpBtn: document.getElementById('hang-up-btn'),
 			backHomeBtn: document.getElementById('back-home-btn'),
 			endedReason: document.getElementById('ended-reason'),
@@ -80,7 +82,13 @@ class VideoKall {
 		// Call controls
 		this.elements.toggleAudioBtn.addEventListener('click', () => this.toggleAudio());
 		this.elements.toggleVideoBtn.addEventListener('click', () => this.toggleVideo());
+		this.elements.switchCameraBtn.addEventListener('click', () => this.switchCamera());
 		this.elements.hangUpBtn.addEventListener('click', () => this.hangUp());
+		
+		// Show switch camera button only on mobile devices
+		if (this.isMobileDevice()) {
+			this.elements.switchCameraBtn.classList.remove('hidden');
+		}
 		
 		// Ended screen
 		this.elements.backHomeBtn.addEventListener('click', () => this.backToHome());
@@ -376,7 +384,7 @@ class VideoKall {
 				video: {
 					width: { ideal: 1280 },
 					height: { ideal: 720 },
-					facingMode: 'user'
+					facingMode: this.facingMode
 				},
 				audio: {
 					echoCancellation: true,
@@ -589,6 +597,62 @@ class VideoKall {
 		btn.querySelector('.icon-video-off').classList.toggle('hidden', this.isVideoEnabled);
 	}
 	
+	isMobileDevice() {
+		return /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) ||
+			(navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
+	}
+	
+	async switchCamera() {
+		// Toggle facing mode
+		this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+		
+		try {
+			// Stop current video track
+			if (this.localStream) {
+				this.localStream.getVideoTracks().forEach(track => track.stop());
+			}
+			
+			// Get new video stream with switched camera
+			const newStream = await navigator.mediaDevices.getUserMedia({
+				video: {
+					width: { ideal: 1280 },
+					height: { ideal: 720 },
+					facingMode: this.facingMode
+				},
+				audio: false // Don't request audio again
+			});
+			
+			const newVideoTrack = newStream.getVideoTracks()[0];
+			
+			// Replace video track in local stream
+			const oldVideoTrack = this.localStream.getVideoTracks()[0];
+			if (oldVideoTrack) {
+				this.localStream.removeTrack(oldVideoTrack);
+			}
+			this.localStream.addTrack(newVideoTrack);
+			
+			// Update local video element
+			this.elements.localVideo.srcObject = this.localStream;
+			
+			// Replace track in peer connection if active
+			if (this.pc) {
+				const sender = this.pc.getSenders().find(s => s.track?.kind === 'video');
+				if (sender) {
+					await sender.replaceTrack(newVideoTrack);
+				}
+			}
+			
+			// Apply current video enabled state to new track
+			newVideoTrack.enabled = this.isVideoEnabled;
+			
+		} catch (error) {
+			console.error('Failed to switch camera:', error);
+			// Revert facing mode on failure
+			this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+			this.showError('Could not switch camera. Your device may not have multiple cameras.');
+		}
+	}
+	
 	hangUp() {
 		// Only send hang-up if we have an active connection
 		try {
@@ -681,6 +745,7 @@ class VideoKall {
 		this.role = null;
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
+		this.facingMode = 'user';
 		this.pendingIceCandidates = [];
 		this.isRemoteDescriptionSet = false;
 		this.pendingOffer = null;

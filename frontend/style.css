@@ -539,8 +539,10 @@ input:focus {
 	height: 64px;
 	border-radius: 50%;
 	padding: 0;
-	background: var(--color-bg-card);
-	border: 1px solid var(--color-border);
+	background: rgba(74, 222, 128, 0.15);
+	border: 2px solid var(--color-success);
+	color: var(--color-success);
+	transition: var(--transition);
 }
 
 .btn.control svg {
@@ -549,7 +551,7 @@ input:focus {
 }
 
 .btn.control:hover {
-	background: var(--color-surface);
+	background: rgba(74, 222, 128, 0.25);
 	transform: scale(1.05);
 }
 
@@ -557,6 +559,10 @@ input:focus {
 	background: rgba(248, 113, 113, 0.2);
 	border-color: var(--color-danger);
 	color: var(--color-danger);
+}
+
+.btn.control.muted:hover {
+	background: rgba(248, 113, 113, 0.3);
 }
 
 .btn.control.danger {
@@ -568,6 +574,16 @@ input:focus {
 .btn.control.danger:hover {
 	background: #ef4444;
 	transform: scale(1.05);
+}
+
+#switch-camera-btn {
+	background: rgba(74, 159, 255, 0.15);
+	border-color: var(--color-secondary);
+	color: var(--color-secondary);
+}
+
+#switch-camera-btn:hover {
+	background: rgba(74, 159, 255, 0.25);
 }
 
 .hidden {
