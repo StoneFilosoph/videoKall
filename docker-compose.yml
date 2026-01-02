@@ -1,0 +1,64 @@
+version: '3'
+
+services:
+  # Nginx web server for frontend
+  web:
+    image: nginx:alpine
+    ports:
+      - "8080:80"
+      - "8443:443"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+    depends_on:
+      - signaling
+    restart: unless-stopped
+    networks:
+      - videokall
+
+  # Node.js signaling server
+  signaling:
+    build: ./signaling
+    environment:
+      - SPECIAL_CODE=${SPECIAL_CODE}
+      - PORT=3000
+      - TURN_USERNAME=${TURN_USERNAME}
+      - TURN_PASSWORD=${TURN_PASSWORD}
+      - EXTERNAL_IP=${EXTERNAL_IP}
+      - TURN_SERVER_PUBLIC=${TURN_SERVER_PUBLIC}
+      - TURN_TLS_ENABLED=${TURN_TLS_ENABLED}
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - videokall
+
+  # Coturn TURN/STUN server
+  turnserver:
+    build: ./turnserver
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/udp"
+      - "5349:5349/tcp"
+      - "49152-49200:49152-49200/udp"
+    environment:
+      - TURN_USERNAME=${TURN_USERNAME}
+      - TURN_PASSWORD=${TURN_PASSWORD}
+      - TURN_REALM=${TURN_REALM}
+      - EXTERNAL_IP=${EXTERNAL_IP}
+    restart: unless-stopped
+    networks:
+      - videokall
+
+networks:
+  videokall:
+    driver: bridge
+

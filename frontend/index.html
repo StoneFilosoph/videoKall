@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1.0">
+	<title>VideoKall - Family Video Calls</title>
+	<link rel="preconnect" href="https://fonts.googleapis.com">
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+	<link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+	<link rel="stylesheet" href="style.css">
+</head>
+<body>
+	<div class="app">
+		<!-- Entry Screen -->
+		<div id="entry-screen" class="screen active">
+			<div class="container">
+				<div class="logo">
+					<div class="logo-icon">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M15.6 11.6L22 7v10l-6.4-4.6v-1z"/>
+							<rect x="2" y="6" width="14" height="12" rx="2"/>
+						</svg>
+					</div>
+					<h1>VideoKall</h1>
+				</div>
+				<p class="tagline">Simple video calls for family</p>
+				
+				<div class="entry-options">
+					<div class="option-card" id="host-option">
+						<div class="option-icon">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<circle cx="12" cy="12" r="10"/>
+								<line x1="12" y1="8" x2="12" y2="16"/>
+								<line x1="8" y1="12" x2="16" y2="12"/>
+							</svg>
+						</div>
+						<h3>Start a Call</h3>
+						<p>Create a new room with your special code</p>
+						<div class="input-group">
+							<input type="password" id="special-code" placeholder="Enter special code" autocomplete="off">
+							<button id="create-room-btn" class="btn primary">Create Room</button>
+						</div>
+					</div>
+					
+					<div class="divider">
+						<span>or</span>
+					</div>
+					
+					<div class="option-card" id="join-option">
+						<div class="option-icon">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/>
+								<polyline points="10 17 15 12 10 7"/>
+								<line x1="15" y1="12" x2="3" y2="12"/>
+							</svg>
+						</div>
+						<h3>Join a Call</h3>
+						<p>Enter the calling address shared with you</p>
+						<div class="input-group">
+							<input type="text" id="room-address" placeholder="xxxx-xxxx-xxxx" autocomplete="off" maxlength="14">
+							<button id="join-room-btn" class="btn secondary">Join Room</button>
+						</div>
+					</div>
+				</div>
+				
+				<div id="error-message" class="error-message"></div>
+			</div>
+		</div>
+		
+		<!-- Waiting Screen (Host waiting for guest) -->
+		<div id="waiting-screen" class="screen">
+			<div class="container">
+				<div class="waiting-content">
+					<div class="pulse-ring">
+						<div class="pulse-circle"></div>
+					</div>
+					<h2>Waiting for guest...</h2>
+					<p>Share this calling address:</p>
+					<div class="room-code-display">
+						<span id="display-room-code"></span>
+						<button id="copy-code-btn" class="btn icon" title="Copy room code">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+								<rect x="9" y="9" width="13" height="13" rx="2"/>
+								<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+							</svg>
+						</button>
+					</div>
+					<p class="copy-hint" id="copy-hint">Click to copy code</p>
+					
+					<div class="join-link-section">
+						<p>Or share a direct join link:</p>
+						<button id="copy-link-btn" class="btn secondary">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="btn-icon">
+								<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+								<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+							</svg>
+							Copy Join Link
+						</button>
+						<p class="link-hint" id="link-hint">Anyone with this link can join directly</p>
+					</div>
+					
+					<button id="cancel-waiting-btn" class="btn text">Cancel</button>
+				</div>
+			</div>
+		</div>
+		
+		<!-- Call Screen -->
+		<div id="call-screen" class="screen">
+			<div class="video-container">
+				<video id="remote-video" autoplay playsinline></video>
+				<video id="local-video" autoplay playsinline muted></video>
+				<div id="connection-status" class="connection-status">Connecting...</div>
+			</div>
+			<div class="call-controls">
+				<button id="toggle-audio-btn" class="btn control" title="Toggle microphone">
+					<svg class="icon-mic-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/>
+						<path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+						<line x1="12" y1="19" x2="12" y2="23"/>
+						<line x1="8" y1="23" x2="16" y2="23"/>
+					</svg>
+					<svg class="icon-mic-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<line x1="1" y1="1" x2="23" y2="23"/>
+						<path d="M9 9v3a3 3 0 0 0 5.12 2.12M15 9.34V4a3 3 0 0 0-5.94-.6"/>
+						<path d="M17 16.95A7 7 0 0 1 5 12v-2m14 0v2a7 7 0 0 1-.11 1.23"/>
+						<line x1="12" y1="19" x2="12" y2="23"/>
+						<line x1="8" y1="23" x2="16" y2="23"/>
+					</svg>
+				</button>
+				<button id="toggle-video-btn" class="btn control" title="Toggle camera">
+					<svg class="icon-video-on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M23 7l-7 5 7 5V7z"/>
+						<rect x="1" y="5" width="15" height="14" rx="2"/>
+					</svg>
+					<svg class="icon-video-off hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M16 16v1a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V7a2 2 0 0 1 2-2h2m5.66 0H14a2 2 0 0 1 2 2v3.34l1 1L23 7v10"/>
+						<line x1="1" y1="1" x2="23" y2="23"/>
+					</svg>
+				</button>
+				<button id="hang-up-btn" class="btn control danger" title="End call">
+					<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+						<path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7 2 2 0 0 1 1.72 2v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.42 19.42 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.63A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91"/>
+						<line x1="23" y1="1" x2="1" y2="23"/>
+					</svg>
+				</button>
+			</div>
+		</div>
+		
+		<!-- Ended Screen -->
+		<div id="ended-screen" class="screen">
+			<div class="container">
+				<div class="ended-content">
+					<div class="ended-icon">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/>
+						</svg>
+					</div>
+					<h2>Call Ended</h2>
+					<p id="ended-reason">The call has ended.</p>
+					<button id="back-home-btn" class="btn primary">Back to Home</button>
+				</div>
+			</div>
+		</div>
+	</div>
+	
+	<script src="app.js"></script>
+</body>
+</html>
+
