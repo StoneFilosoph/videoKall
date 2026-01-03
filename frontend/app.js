@@ -504,6 +504,44 @@ class VideoKall {
 		this.showScreen('ended');
 	}
 	
+	// Set AV1 as the preferred video codec
+	setPreferredCodec(pc) {
+		// Check if setCodecPreferences is supported
+		const transceivers = pc.getTransceivers();
+		
+		for (const transceiver of transceivers) {
+			if (transceiver.sender?.track?.kind === 'video') {
+				const capabilities = RTCRtpSender.getCapabilities?.('video');
+				if (!capabilities) {
+					console.log('RTCRtpSender.getCapabilities not supported');
+					return;
+				}
+				
+				const codecs = capabilities.codecs;
+				
+				// Find AV1 codecs and move them to the front
+				const av1Codecs = codecs.filter(c => 
+					c.mimeType.toLowerCase() === 'video/av1'
+				);
+				const otherCodecs = codecs.filter(c => 
+					c.mimeType.toLowerCase() !== 'video/av1'
+				);
+				
+				if (av1Codecs.length > 0) {
+					const preferredOrder = [...av1Codecs, ...otherCodecs];
+					try {
+						transceiver.setCodecPreferences(preferredOrder);
+						console.log('AV1 codec preference set successfully');
+					} catch (e) {
+						console.warn('Failed to set AV1 codec preference:', e);
+					}
+				} else {
+					console.log('AV1 codec not available in browser');
+				}
+			}
+		}
+	}
+	
 	createPeerConnection(peerId, initiator = false) {
 		if (this.peers.has(peerId)) {
 			console.log(`Peer connection already exists for ${peerId}`);
@@ -523,6 +561,9 @@ class VideoKall {
 		this.localStream.getTracks().forEach(track => {
 			pc.addTrack(track, this.localStream);
 		});
+		
+		// Set AV1 as preferred codec
+		this.setPreferredCodec(pc);
 		
 		// Create video element for this peer
 		const videoEl = document.createElement('video');
