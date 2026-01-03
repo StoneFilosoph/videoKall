@@ -3,186 +3,98 @@
 class VideoKall {
 	constructor() {
 		this.ws = null;
-		this.pc = null;
 		this.localStream = null;
-		this.remoteStream = null;
 		this.roomId = null;
-		this.role = null; // 'host' or 'guest'
+		this.roomName = null;
+		this.participantId = null;
+		this.isHost = false;
 		this.iceServers = [];
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
-		this.facingMode = 'user'; // 'user' = front, 'environment' = back
-		this.codecPreference = 'av1'; // 'av1' or 'standard'
+		this.facingMode = 'user';
+		this.adminCode = null;
+		
+		// Peer connections for each participant (mesh topology)
+		// Map<participantId, { pc: RTCPeerConnection, stream: MediaStream }>
+		this.peers = new Map();
 		
 		// Queue for ICE candidates that arrive before remote description is set
-		this.pendingIceCandidates = [];
-		this.isRemoteDescriptionSet = false;
-		
-		// Queue for offer that arrives before media is ready (host side)
-		this.pendingOffer = null;
-		this.isMediaReady = false;
+		this.pendingIceCandidates = new Map(); // participantId -> [candidates]
 		
 		this.init();
 	}
 	
 	init() {
-		// DOM Elements
 		this.screens = {
 			entry: document.getElementById('entry-screen'),
-			waiting: document.getElementById('waiting-screen'),
+			admin: document.getElementById('admin-screen'),
+			joining: document.getElementById('joining-screen'),
 			call: document.getElementById('call-screen'),
 			ended: document.getElementById('ended-screen')
 		};
 		
 		this.elements = {
-			specialCode: document.getElementById('special-code'),
-			roomAddress: document.getElementById('room-address'),
-			codecOptions: document.querySelectorAll('input[name="codec"]'),
+			adminCode: document.getElementById('admin-code'),
+			adminLoginBtn: document.getElementById('admin-login-btn'),
+			adminLogoutBtn: document.getElementById('admin-logout-btn'),
+			newRoomName: document.getElementById('new-room-name'),
 			createRoomBtn: document.getElementById('create-room-btn'),
-			joinRoomBtn: document.getElementById('join-room-btn'),
-			displayRoomCode: document.getElementById('display-room-code'),
-			copyCodeBtn: document.getElementById('copy-code-btn'),
-			copyHint: document.getElementById('copy-hint'),
-			copyLinkBtn: document.getElementById('copy-link-btn'),
-			linkHint: document.getElementById('link-hint'),
-			cancelWaitingBtn: document.getElementById('cancel-waiting-btn'),
+			roomsList: document.getElementById('rooms-list'),
+			noRooms: document.getElementById('no-rooms'),
+			joiningRoomName: document.getElementById('joining-room-name'),
+			cancelJoinBtn: document.getElementById('cancel-join-btn'),
+			videosGrid: document.getElementById('videos-grid'),
 			localVideo: document.getElementById('local-video'),
-			remoteVideo: document.getElementById('remote-video'),
 			connectionStatus: document.getElementById('connection-status'),
 			toggleAudioBtn: document.getElementById('toggle-audio-btn'),
 			toggleVideoBtn: document.getElementById('toggle-video-btn'),
 			switchCameraBtn: document.getElementById('switch-camera-btn'),
-			hangUpBtn: document.getElementById('hang-up-btn'),
-			backHomeBtn: document.getElementById('back-home-btn'),
+			leaveCallBtn: document.getElementById('leave-call-btn'),
+			endedTitle: document.getElementById('ended-title'),
 			endedReason: document.getElementById('ended-reason'),
+			rejoinBtn: document.getElementById('rejoin-btn'),
+			backHomeBtn: document.getElementById('back-home-btn'),
 			errorMessage: document.getElementById('error-message')
 		};
 		
 		this.bindEvents();
-		this.formatRoomAddressInput();
 		this.checkJoinLink();
 	}
 	
 	bindEvents() {
 		// Entry screen
-		this.elements.createRoomBtn.addEventListener('click', () => this.createRoom());
-		this.elements.joinRoomBtn.addEventListener('click', () => this.joinRoom());
+		this.elements.adminLoginBtn.addEventListener('click', () => this.adminLogin());
+		this.elements.adminCode.addEventListener('keypress', (e) => {
+			if (e.key === 'Enter') this.adminLogin();
+		});
 		
-		// Allow Enter key to submit
-		this.elements.specialCode.addEventListener('keypress', (e) => {
+		// Admin screen
+		this.elements.adminLogoutBtn.addEventListener('click', () => this.adminLogout());
+		this.elements.createRoomBtn.addEventListener('click', () => this.createRoom());
+		this.elements.newRoomName.addEventListener('keypress', (e) => {
 			if (e.key === 'Enter') this.createRoom();
 		});
-		this.elements.roomAddress.addEventListener('keypress', (e) => {
-			if (e.key === 'Enter') this.joinRoom();
-		});
 		
-		// Waiting screen
-		this.elements.copyCodeBtn.addEventListener('click', () => this.copyRoomCode());
-		this.elements.copyLinkBtn.addEventListener('click', () => this.copyJoinLink());
-		this.elements.cancelWaitingBtn.addEventListener('click', () => this.cancelWaiting());
+		// Joining screen
+		this.elements.cancelJoinBtn.addEventListener('click', () => this.cancelJoin());
 		
 		// Call controls
 		this.elements.toggleAudioBtn.addEventListener('click', () => this.toggleAudio());
 		this.elements.toggleVideoBtn.addEventListener('click', () => this.toggleVideo());
 		this.elements.switchCameraBtn.addEventListener('click', () => this.switchCamera());
-		this.elements.hangUpBtn.addEventListener('click', () => this.hangUp());
+		this.elements.leaveCallBtn.addEventListener('click', () => this.leaveCall());
 		
-		// Show switch camera button only on mobile devices
+		// Show switch camera button only on mobile
 		if (this.isMobileDevice()) {
 			this.elements.switchCameraBtn.classList.remove('hidden');
 		}
 		
 		// Ended screen
+		this.elements.rejoinBtn.addEventListener('click', () => this.rejoinCall());
 		this.elements.backHomeBtn.addEventListener('click', () => this.backToHome());
 		
 		// Make local video draggable
 		this.makeVideoDraggable();
-	}
-	
-	formatRoomAddressInput() {
-		const input = this.elements.roomAddress;
-		input.addEventListener('input', (e) => {
-			let value = e.target.value.replace(/[^a-z0-9]/gi, '').toLowerCase();
-			if (value.length > 4) {
-				value = value.slice(0, 4) + '-' + value.slice(4);
-			}
-			if (value.length > 9) {
-				value = value.slice(0, 9) + '-' + value.slice(9);
-			}
-			value = value.slice(0, 14);
-			e.target.value = value;
-		});
-	}
-	
-	checkJoinLink() {
-		// Check if there's a ?join= parameter in the URL
-		const urlParams = new URLSearchParams(window.location.search);
-		const joinRoomId = urlParams.get('join');
-		
-		if (joinRoomId) {
-			// Validate format: xxxx-xxxx-xxxx
-			const roomIdRegex = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
-			if (roomIdRegex.test(joinRoomId.toLowerCase())) {
-				// Auto-fill the room address and trigger join
-				this.elements.roomAddress.value = joinRoomId.toLowerCase();
-				
-				// Clean up the URL (remove the ?join= parameter)
-				const cleanUrl = window.location.origin + window.location.pathname;
-				window.history.replaceState({}, document.title, cleanUrl);
-				
-				// Auto-join after a brief delay to let the UI render
-				setTimeout(() => this.joinRoom(), 100);
-			}
-		}
-	}
-	
-	getJoinLink() {
-		const baseUrl = window.location.origin + window.location.pathname;
-		return `${baseUrl}?join=${this.roomId}`;
-	}
-	
-	copyJoinLink() {
-		const joinLink = this.getJoinLink();
-		
-		const copyText = (text) => {
-			if (navigator.clipboard && navigator.clipboard.writeText) {
-				return navigator.clipboard.writeText(text);
-			}
-			
-			return new Promise((resolve, reject) => {
-				const textArea = document.createElement('textarea');
-				textArea.value = text;
-				textArea.style.position = 'fixed';
-				textArea.style.left = '-9999px';
-				document.body.appendChild(textArea);
-				textArea.select();
-				try {
-					document.execCommand('copy');
-					resolve();
-				} catch (err) {
-					reject(err);
-				} finally {
-					document.body.removeChild(textArea);
-				}
-			});
-		};
-		
-		copyText(joinLink)
-			.then(() => {
-				this.elements.linkHint.textContent = 'Link copied!';
-				this.elements.linkHint.classList.add('copied');
-				setTimeout(() => {
-					this.elements.linkHint.textContent = 'Anyone with this link can join directly';
-					this.elements.linkHint.classList.remove('copied');
-				}, 2000);
-			})
-			.catch((err) => {
-				console.error('Failed to copy:', err);
-				this.elements.linkHint.textContent = 'Copy failed';
-				setTimeout(() => {
-					this.elements.linkHint.textContent = 'Anyone with this link can join directly';
-				}, 2000);
-			});
 	}
 	
 	showScreen(screenName) {
@@ -200,9 +112,240 @@ class VideoKall {
 		}, 5000);
 	}
 	
+	// Check if joining via direct link
+	checkJoinLink() {
+		const urlParams = new URLSearchParams(window.location.search);
+		const joinRoomId = urlParams.get('join');
+		
+		if (joinRoomId) {
+			const roomIdRegex = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
+			if (roomIdRegex.test(joinRoomId.toLowerCase())) {
+				// Clean URL
+				const cleanUrl = window.location.origin + window.location.pathname;
+				window.history.replaceState({}, document.title, cleanUrl);
+				
+				// Direct join
+				this.directJoin(joinRoomId.toLowerCase());
+			}
+		}
+	}
+	
+	async directJoin(roomId) {
+		this.roomId = roomId;
+		this.showScreen('joining');
+		this.elements.joiningRoomName.textContent = 'Connecting...';
+		
+		try {
+			// Check if room exists
+			const response = await fetch(`/api/room/${roomId}`);
+			const data = await response.json();
+			
+			if (!data.exists) {
+				this.showScreen('entry');
+				this.showError('Room not found. It may have been deleted.');
+				return;
+			}
+			
+			this.roomName = data.name;
+			this.elements.joiningRoomName.textContent = data.name;
+			
+			// Start media and join
+			await this.startCall();
+		} catch (error) {
+			console.error('Failed to join:', error);
+			this.showScreen('entry');
+			this.showError('Failed to join room. Please try again.');
+		}
+	}
+	
+	// Admin functions
+	async adminLogin() {
+		const code = this.elements.adminCode.value.trim();
+		if (!code) {
+			this.showError('Please enter the special code');
+			return;
+		}
+		
+		try {
+			// Verify code by making an API call
+			const response = await fetch('/api/admin/rooms', {
+				headers: { 'X-Admin-Code': code }
+			});
+			
+			if (response.status === 401) {
+				this.showError('Invalid special code');
+				return;
+			}
+			
+			this.adminCode = code;
+			this.showScreen('admin');
+			this.loadRooms();
+		} catch (error) {
+			this.showError('Failed to connect. Please try again.');
+		}
+	}
+	
+	adminLogout() {
+		this.adminCode = null;
+		this.elements.adminCode.value = '';
+		this.showScreen('entry');
+	}
+	
+	async loadRooms() {
+		try {
+			const response = await fetch('/api/admin/rooms', {
+				headers: { 'X-Admin-Code': this.adminCode }
+			});
+			
+			if (!response.ok) throw new Error('Failed to load rooms');
+			
+			const data = await response.json();
+			this.renderRooms(data.rooms);
+		} catch (error) {
+			console.error('Failed to load rooms:', error);
+			this.elements.roomsList.innerHTML = '<div class="error-rooms">Failed to load rooms</div>';
+		}
+	}
+	
+	renderRooms(rooms) {
+		if (rooms.length === 0) {
+			this.elements.roomsList.innerHTML = '';
+			this.elements.noRooms.classList.remove('hidden');
+			return;
+		}
+		
+		this.elements.noRooms.classList.add('hidden');
+		
+		const html = rooms.map(room => `
+			<div class="room-card" data-room-id="${room.id}">
+				<div class="room-info">
+					<h3>${this.escapeHtml(room.name)}</h3>
+					<div class="room-meta">
+						<span class="room-id">${room.id}</span>
+						<span class="room-participants">
+							<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14">
+								<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+								<circle cx="9" cy="7" r="4"/>
+								<path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+								<path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+							</svg>
+							${room.participantCount} in call
+						</span>
+					</div>
+				</div>
+				<div class="room-actions">
+					<button class="btn icon" onclick="videoKall.copyRoomLink('${room.id}')" title="Copy link">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+							<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+							<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+						</svg>
+					</button>
+					<button class="btn secondary small" onclick="videoKall.joinRoomAsAdmin('${room.id}')">Join</button>
+					<button class="btn danger-outline small" onclick="videoKall.deleteRoom('${room.id}')" title="Delete room">
+						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
+							<polyline points="3 6 5 6 21 6"/>
+							<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
+						</svg>
+					</button>
+				</div>
+			</div>
+		`).join('');
+		
+		this.elements.roomsList.innerHTML = html;
+	}
+	
+	escapeHtml(text) {
+		const div = document.createElement('div');
+		div.textContent = text;
+		return div.innerHTML;
+	}
+	
+	async createRoom() {
+		const name = this.elements.newRoomName.value.trim() || 'New Room';
+		
+		try {
+			const response = await fetch('/api/admin/rooms', {
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'X-Admin-Code': this.adminCode
+				},
+				body: JSON.stringify({ name })
+			});
+			
+			if (!response.ok) throw new Error('Failed to create room');
+			
+			this.elements.newRoomName.value = '';
+			this.loadRooms();
+		} catch (error) {
+			console.error('Failed to create room:', error);
+			this.showError('Failed to create room');
+		}
+	}
+	
+	async deleteRoom(roomId) {
+		if (!confirm('Are you sure you want to delete this room? Anyone in the call will be disconnected.')) {
+			return;
+		}
+		
+		try {
+			const response = await fetch(`/api/admin/rooms/${roomId}`, {
+				method: 'DELETE',
+				headers: { 'X-Admin-Code': this.adminCode }
+			});
+			
+			if (!response.ok) throw new Error('Failed to delete room');
+			
+			this.loadRooms();
+		} catch (error) {
+			console.error('Failed to delete room:', error);
+			this.showError('Failed to delete room');
+		}
+	}
+	
+	copyRoomLink(roomId) {
+		const link = `${window.location.origin}${window.location.pathname}?join=${roomId}`;
+		
+		navigator.clipboard.writeText(link).then(() => {
+			// Find the button and show feedback
+			const card = document.querySelector(`[data-room-id="${roomId}"]`);
+			if (card) {
+				const btn = card.querySelector('.btn.icon');
+				btn.classList.add('copied');
+				setTimeout(() => btn.classList.remove('copied'), 2000);
+			}
+		}).catch(err => {
+			console.error('Failed to copy:', err);
+			// Fallback
+			const textArea = document.createElement('textarea');
+			textArea.value = link;
+			textArea.style.position = 'fixed';
+			textArea.style.left = '-9999px';
+			document.body.appendChild(textArea);
+			textArea.select();
+			try {
+				document.execCommand('copy');
+			} catch (e) {}
+			document.body.removeChild(textArea);
+		});
+	}
+	
+	joinRoomAsAdmin(roomId) {
+		this.directJoin(roomId);
+	}
+	
+	cancelJoin() {
+		this.cleanup();
+		if (this.adminCode) {
+			this.showScreen('admin');
+		} else {
+			this.showScreen('entry');
+		}
+	}
+	
+	// WebSocket connection
 	connectWebSocket() {
 		return new Promise((resolve, reject) => {
-			// Close existing WebSocket if any
 			if (this.ws && this.ws.readyState !== WebSocket.CLOSED) {
 				this.ws.close();
 				this.ws = null;
@@ -225,10 +368,6 @@ class VideoKall {
 			
 			this.ws.onclose = () => {
 				console.log('WebSocket disconnected');
-				// Notify user if disconnect happens during a call
-				if (this.screens.call.classList.contains('active')) {
-					this.onPeerDisconnected();
-				}
 			};
 			
 			this.ws.onmessage = (event) => {
@@ -246,26 +385,32 @@ class VideoKall {
 		console.log('Received:', message.type);
 		
 		switch (message.type) {
-			case 'room-created':
-				this.onRoomCreated(message);
-				break;
 			case 'room-joined':
 				this.onRoomJoined(message);
 				break;
-			case 'guest-joined':
-				this.onGuestJoined();
+			case 'participant-joined':
+				this.onParticipantJoined(message.participantId);
+				break;
+			case 'participant-left':
+				this.onParticipantLeft(message.participantId);
 				break;
 			case 'offer':
-				this.onOffer(message.data);
+				this.onOffer(message.data, message.fromId);
 				break;
 			case 'answer':
-				this.onAnswer(message.data);
+				this.onAnswer(message.data, message.fromId);
 				break;
 			case 'ice-candidate':
-				this.onIceCandidate(message.data);
+				this.onIceCandidate(message.data, message.fromId);
 				break;
-			case 'peer-disconnected':
-				this.onPeerDisconnected();
+			case 'you-are-host':
+				this.onBecameHost();
+				break;
+			case 'new-host':
+				this.onNewHost(message.hostId);
+				break;
+			case 'room-deleted':
+				this.onRoomDeleted();
 				break;
 			case 'error':
 				this.showError(message.message);
@@ -273,127 +418,23 @@ class VideoKall {
 		}
 	}
 	
-	getSelectedCodec() {
-		for (const option of this.elements.codecOptions) {
-			if (option.checked) {
-				return option.value;
-			}
-		}
-		return 'av1'; // default
-	}
-	
-	async createRoom() {
-		const code = this.elements.specialCode.value.trim();
-		if (!code) {
-			this.showError('Please enter the special code');
-			return;
-		}
-		
-		// Get selected codec preference
-		this.codecPreference = this.getSelectedCodec();
-		
+	async startCall() {
 		try {
+			await this.setupMedia();
+			this.showScreen('call');
+			
 			await this.connectWebSocket();
-			this.ws.send(JSON.stringify({
-				type: 'create-room',
-				code: code,
-				codec: this.codecPreference
-			}));
-		} catch (error) {
-			this.showError(error.message);
-		}
-	}
-	
-	async joinRoom() {
-		const roomId = this.elements.roomAddress.value.trim().toLowerCase();
-		
-		// Validate format: xxxx-xxxx-xxxx (12 alphanumeric chars with 2 dashes)
-		const roomIdRegex = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
-		if (!roomId || !roomIdRegex.test(roomId)) {
-			this.showError('Please enter a valid calling address (format: xxxx-xxxx-xxxx)');
-			return;
-		}
-		
-		try {
-			await this.connectWebSocket();
+			
+			// Join the room
 			this.ws.send(JSON.stringify({
 				type: 'join-room',
-				roomId: roomId
+				roomId: this.roomId
 			}));
-		} catch (error) {
-			this.showError(error.message);
-		}
-	}
-	
-	onRoomCreated(message) {
-		this.roomId = message.roomId;
-		this.role = 'host';
-		this.iceServers = message.iceServers;
-		// Codec preference already set when creating room
-		
-		this.elements.displayRoomCode.textContent = this.roomId;
-		this.showScreen('waiting');
-	}
-	
-	async onRoomJoined(message) {
-		this.roomId = message.roomId;
-		this.role = 'guest';
-		this.iceServers = message.iceServers;
-		// Use codec preference set by host
-		this.codecPreference = message.codec || 'standard';
-		console.log('Using codec preference from host:', this.codecPreference);
-		
-		// Guest initiates the call
-		try {
-			await this.startCall();
 		} catch (error) {
 			console.error('Failed to start call:', error);
 			this.cleanup();
 			this.showScreen('entry');
-		}
-	}
-	
-	async onGuestJoined() {
-		// Host receives notification that guest joined
-		// Wait for the offer from guest
-		try {
-			await this.setupMedia();
-			this.isMediaReady = true;
-			this.showScreen('call');
-			
-			// Process any offer that arrived while we were setting up media
-			if (this.pendingOffer) {
-				await this.processOffer(this.pendingOffer);
-				this.pendingOffer = null;
-			}
-		} catch (error) {
-			console.error('Failed to setup media:', error);
-			this.cleanup();
-			this.showScreen('entry');
-		}
-	}
-	
-	async startCall() {
-		await this.setupMedia();
-		this.isMediaReady = true;
-		this.showScreen('call');
-		
-		// Create peer connection
-		this.createPeerConnection();
-		
-		try {
-			// Create and send offer
-			const offer = await this.pc.createOffer();
-			await this.pc.setLocalDescription(offer);
-			
-			this.ws.send(JSON.stringify({
-				type: 'offer',
-				data: offer
-			}));
-		} catch (error) {
-			console.error('Failed to create offer:', error);
-			this.showError('Failed to start video call. Please try again.');
-			throw error;
+			this.showError('Failed to start call. Please check camera/microphone permissions.');
 		}
 	}
 	
@@ -414,241 +455,263 @@ class VideoKall {
 			this.elements.localVideo.srcObject = this.localStream;
 		} catch (error) {
 			console.error('Failed to get media devices:', error);
-			this.showError('Could not access camera/microphone. Please grant permissions.');
 			throw error;
 		}
 	}
 	
-	createPeerConnection() {
-		// Reset ICE candidate state
-		this.pendingIceCandidates = [];
-		this.isRemoteDescriptionSet = false;
+	onRoomJoined(message) {
+		this.participantId = message.participantId;
+		this.isHost = message.isHost;
+		this.iceServers = message.iceServers;
+		this.roomName = message.roomName;
+		
+		console.log(`Joined room as ${this.isHost ? 'host' : 'participant'}, ID: ${this.participantId}`);
+		
+		this.updateConnectionStatus('connected');
+		
+		// Connect to existing participants
+		for (const peerId of message.existingParticipants) {
+			this.createPeerConnection(peerId, true);
+		}
+	}
+	
+	onParticipantJoined(participantId) {
+		console.log(`Participant joined: ${participantId}`);
+		// Wait for them to send us an offer
+	}
+	
+	onParticipantLeft(participantId) {
+		console.log(`Participant left: ${participantId}`);
+		this.removePeer(participantId);
+	}
+	
+	onBecameHost() {
+		this.isHost = true;
+		console.log('You are now the host');
+		this.updateConnectionStatus('You are now the host');
+		setTimeout(() => this.updateConnectionStatus('connected'), 3000);
+	}
+	
+	onNewHost(hostId) {
+		console.log(`New host: ${hostId}`);
+	}
+	
+	onRoomDeleted() {
+		this.cleanup();
+		this.elements.endedTitle.textContent = 'Room Deleted';
+		this.elements.endedReason.textContent = 'The room has been deleted by the admin.';
+		this.elements.rejoinBtn.classList.add('hidden');
+		this.showScreen('ended');
+	}
+	
+	createPeerConnection(peerId, initiator = false) {
+		if (this.peers.has(peerId)) {
+			console.log(`Peer connection already exists for ${peerId}`);
+			return this.peers.get(peerId).pc;
+		}
+		
+		console.log(`Creating peer connection for ${peerId}, initiator: ${initiator}`);
 		
 		const config = {
 			iceServers: this.iceServers,
 			iceCandidatePoolSize: 10
 		};
 		
-		this.pc = new RTCPeerConnection(config);
+		const pc = new RTCPeerConnection(config);
 		
 		// Add local tracks
 		this.localStream.getTracks().forEach(track => {
-			this.pc.addTrack(track, this.localStream);
+			pc.addTrack(track, this.localStream);
 		});
 		
-		// Apply codec preference
-		this.applyCodecPreference();
+		// Create video element for this peer
+		const videoEl = document.createElement('video');
+		videoEl.id = `video-${peerId}`;
+		videoEl.autoplay = true;
+		videoEl.playsinline = true;
+		videoEl.classList.add('remote-video');
+		this.elements.videosGrid.appendChild(videoEl);
+		
+		this.peers.set(peerId, {
+			pc,
+			videoEl,
+			stream: null,
+			isRemoteDescriptionSet: false
+		});
+		
+		// Initialize pending ICE candidates queue
+		this.pendingIceCandidates.set(peerId, []);
 		
 		// Handle remote tracks
-		this.pc.ontrack = (event) => {
-			console.log('Remote track received');
+		pc.ontrack = (event) => {
+			console.log(`Remote track received from ${peerId}`);
 			if (event.streams && event.streams[0]) {
-				this.elements.remoteVideo.srcObject = event.streams[0];
-				this.remoteStream = event.streams[0];
+				videoEl.srcObject = event.streams[0];
+				const peer = this.peers.get(peerId);
+				if (peer) peer.stream = event.streams[0];
 			}
 		};
 		
 		// Handle ICE candidates
-		this.pc.onicecandidate = (event) => {
+		pc.onicecandidate = (event) => {
 			if (event.candidate && this.ws && this.ws.readyState === WebSocket.OPEN) {
 				this.ws.send(JSON.stringify({
 					type: 'ice-candidate',
+					targetId: peerId,
 					data: event.candidate
 				}));
 			}
 		};
 		
 		// Monitor connection state
-		this.pc.onconnectionstatechange = () => {
-			console.log('Connection state:', this.pc.connectionState);
-			this.updateConnectionStatus(this.pc.connectionState);
-			
-			// Handle connection failures
-			if (this.pc.connectionState === 'failed') {
-				this.showError('Connection failed. Please check your network and try again.');
+		pc.onconnectionstatechange = () => {
+			console.log(`Connection state with ${peerId}:`, pc.connectionState);
+			if (pc.connectionState === 'failed') {
+				this.removePeer(peerId);
 			}
 		};
 		
-		this.pc.oniceconnectionstatechange = () => {
-			console.log('ICE connection state:', this.pc.iceConnectionState);
-			
-			// Handle ICE failures
-			if (this.pc.iceConnectionState === 'failed') {
-				console.error('ICE connection failed');
-				// Try to restart ICE
-				this.pc.restartIce();
-			}
-		};
+		// If we're the initiator, create and send offer
+		if (initiator) {
+			this.createAndSendOffer(peerId, pc);
+		}
+		
+		return pc;
 	}
 	
-	applyCodecPreference() {
-		if (!this.pc) return;
-		
-		const transceivers = this.pc.getTransceivers();
-		
-		for (const transceiver of transceivers) {
-			if (transceiver.sender.track?.kind === 'video') {
-				try {
-					// Get available codecs
-					const capabilities = RTCRtpReceiver.getCapabilities?.('video');
-					if (!capabilities || !capabilities.codecs) {
-						console.log('Codec capabilities not available, using browser defaults');
-						return;
-					}
-					
-					const codecs = capabilities.codecs;
-					let sortedCodecs;
-					
-					if (this.codecPreference === 'av1') {
-						// Prefer AV1 > VP9 > VP8 > H.264
-						sortedCodecs = this.sortCodecsByPreference(codecs, ['AV1', 'VP9', 'VP8', 'H264']);
-						console.log('Applied AV1-preferred codec order');
-					} else {
-						// Standard: VP8 > H.264 > VP9 > AV1 (maximum compatibility)
-						sortedCodecs = this.sortCodecsByPreference(codecs, ['VP8', 'H264', 'VP9', 'AV1']);
-						console.log('Applied standard codec order');
-					}
-					
-					transceiver.setCodecPreferences(sortedCodecs);
-				} catch (error) {
-					console.warn('Could not set codec preferences:', error);
-				}
-			}
+	async createAndSendOffer(peerId, pc) {
+		try {
+			const offer = await pc.createOffer();
+			await pc.setLocalDescription(offer);
+			
+			this.ws.send(JSON.stringify({
+				type: 'offer',
+				targetId: peerId,
+				data: offer
+			}));
+		} catch (error) {
+			console.error(`Failed to create offer for ${peerId}:`, error);
 		}
 	}
 	
-	sortCodecsByPreference(codecs, preferredOrder) {
-		return [...codecs].sort((a, b) => {
-			const aMime = a.mimeType.toLowerCase();
-			const bMime = b.mimeType.toLowerCase();
+	async onOffer(offer, fromId) {
+		console.log(`Received offer from ${fromId}`);
+		
+		const pc = this.createPeerConnection(fromId, false);
+		const peer = this.peers.get(fromId);
+		
+		try {
+			await pc.setRemoteDescription(new RTCSessionDescription(offer));
+			peer.isRemoteDescriptionSet = true;
 			
-			let aIndex = preferredOrder.length;
-			let bIndex = preferredOrder.length;
+			// Process pending ICE candidates
+			await this.processPendingIceCandidates(fromId);
 			
-			for (let i = 0; i < preferredOrder.length; i++) {
-				if (aMime.includes(preferredOrder[i].toLowerCase())) {
-					aIndex = i;
-					break;
-				}
+			const answer = await pc.createAnswer();
+			await pc.setLocalDescription(answer);
+			
+			this.ws.send(JSON.stringify({
+				type: 'answer',
+				targetId: fromId,
+				data: answer
+			}));
+		} catch (error) {
+			console.error(`Error handling offer from ${fromId}:`, error);
+		}
+	}
+	
+	async onAnswer(answer, fromId) {
+		console.log(`Received answer from ${fromId}`);
+		
+		const peer = this.peers.get(fromId);
+		if (!peer) return;
+		
+		try {
+			await peer.pc.setRemoteDescription(new RTCSessionDescription(answer));
+			peer.isRemoteDescriptionSet = true;
+			
+			// Process pending ICE candidates
+			await this.processPendingIceCandidates(fromId);
+		} catch (error) {
+			console.error(`Error handling answer from ${fromId}:`, error);
+		}
+	}
+	
+	async onIceCandidate(candidate, fromId) {
+		if (!candidate) return;
+		
+		const peer = this.peers.get(fromId);
+		
+		// If remote description isn't set yet, queue the candidate
+		if (!peer || !peer.isRemoteDescriptionSet) {
+			console.log(`Queuing ICE candidate from ${fromId}`);
+			let queue = this.pendingIceCandidates.get(fromId);
+			if (!queue) {
+				queue = [];
+				this.pendingIceCandidates.set(fromId, queue);
 			}
-			
-			for (let i = 0; i < preferredOrder.length; i++) {
-				if (bMime.includes(preferredOrder[i].toLowerCase())) {
-					bIndex = i;
-					break;
-				}
+			queue.push(candidate);
+			return;
+		}
+		
+		try {
+			await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+		} catch (error) {
+			console.error(`Error adding ICE candidate from ${fromId}:`, error);
+		}
+	}
+	
+	async processPendingIceCandidates(peerId) {
+		const candidates = this.pendingIceCandidates.get(peerId);
+		const peer = this.peers.get(peerId);
+		
+		if (!candidates || !peer) return;
+		
+		for (const candidate of candidates) {
+			try {
+				await peer.pc.addIceCandidate(new RTCIceCandidate(candidate));
+				console.log(`Added pending ICE candidate for ${peerId}`);
+			} catch (error) {
+				console.error(`Error adding pending ICE candidate for ${peerId}:`, error);
 			}
-			
-			return aIndex - bIndex;
-		});
+		}
+		
+		this.pendingIceCandidates.set(peerId, []);
+	}
+	
+	removePeer(peerId) {
+		const peer = this.peers.get(peerId);
+		if (!peer) return;
+		
+		if (peer.pc) {
+			peer.pc.close();
+		}
+		
+		if (peer.videoEl && peer.videoEl.parentNode) {
+			peer.videoEl.parentNode.removeChild(peer.videoEl);
+		}
+		
+		this.peers.delete(peerId);
+		this.pendingIceCandidates.delete(peerId);
 	}
 	
 	updateConnectionStatus(state) {
 		const status = this.elements.connectionStatus;
 		
-		switch (state) {
-			case 'connecting':
-				status.textContent = 'Connecting...';
-				status.classList.remove('connected', 'hidden');
-				break;
-			case 'connected':
-				status.textContent = 'Connected';
-				status.classList.add('connected');
-				setTimeout(() => {
-					status.classList.add('hidden');
-				}, 2000);
-				break;
-			case 'disconnected':
-			case 'failed':
-				status.textContent = 'Connection lost';
-				status.classList.remove('connected', 'hidden');
-				break;
+		if (state === 'connected') {
+			status.textContent = 'Connected';
+			status.classList.add('connected');
+			setTimeout(() => {
+				status.classList.add('hidden');
+			}, 2000);
+		} else if (state === 'connecting') {
+			status.textContent = 'Connecting...';
+			status.classList.remove('connected', 'hidden');
+		} else {
+			status.textContent = state;
+			status.classList.remove('hidden');
+			status.classList.add('connected');
 		}
-	}
-	
-	async onOffer(offer) {
-		// Host receives offer from guest
-		// If media isn't ready yet, queue the offer for later processing
-		if (!this.isMediaReady) {
-			console.log('Queuing offer (media not ready yet)');
-			this.pendingOffer = offer;
-			return;
-		}
-		
-		await this.processOffer(offer);
-	}
-	
-	async processOffer(offer) {
-		try {
-			this.createPeerConnection();
-			
-			await this.pc.setRemoteDescription(new RTCSessionDescription(offer));
-			this.isRemoteDescriptionSet = true;
-			
-			// Process any queued ICE candidates
-			await this.processPendingIceCandidates();
-			
-			const answer = await this.pc.createAnswer();
-			await this.pc.setLocalDescription(answer);
-			
-			this.ws.send(JSON.stringify({
-				type: 'answer',
-				data: answer
-			}));
-		} catch (error) {
-			console.error('Error handling offer:', error);
-			this.showError('Failed to establish connection. Please try again.');
-		}
-	}
-	
-	async onAnswer(answer) {
-		// Guest receives answer from host
-		try {
-			await this.pc.setRemoteDescription(new RTCSessionDescription(answer));
-			this.isRemoteDescriptionSet = true;
-			
-			// Process any queued ICE candidates
-			await this.processPendingIceCandidates();
-		} catch (error) {
-			console.error('Error handling answer:', error);
-			this.showError('Failed to establish connection. Please try again.');
-		}
-	}
-	
-	async processPendingIceCandidates() {
-		// Add all queued ICE candidates now that remote description is set
-		for (const candidate of this.pendingIceCandidates) {
-			try {
-				await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-				console.log('Added pending ICE candidate');
-			} catch (error) {
-				console.error('Error adding pending ICE candidate:', error);
-			}
-		}
-		this.pendingIceCandidates = [];
-	}
-	
-	async onIceCandidate(candidate) {
-		if (!candidate) return;
-		
-		// If remote description isn't set yet, queue the candidate
-		if (!this.pc || !this.isRemoteDescriptionSet) {
-			console.log('Queuing ICE candidate (remote description not set)');
-			this.pendingIceCandidates.push(candidate);
-			return;
-		}
-		
-		try {
-			await this.pc.addIceCandidate(new RTCIceCandidate(candidate));
-		} catch (error) {
-			console.error('Error adding ICE candidate:', error);
-		}
-	}
-	
-	onPeerDisconnected() {
-		this.cleanup();
-		this.elements.endedReason.textContent = 'The other person has left the call.';
-		this.showScreen('ended');
 	}
 	
 	toggleAudio() {
@@ -687,118 +750,76 @@ class VideoKall {
 	}
 	
 	async switchCamera() {
-		// Toggle facing mode
 		this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
 		
 		try {
-			// Stop current video track
 			if (this.localStream) {
 				this.localStream.getVideoTracks().forEach(track => track.stop());
 			}
 			
-			// Get new video stream with switched camera
 			const newStream = await navigator.mediaDevices.getUserMedia({
 				video: {
 					width: { ideal: 1280 },
 					height: { ideal: 720 },
 					facingMode: this.facingMode
 				},
-				audio: false // Don't request audio again
+				audio: false
 			});
 			
 			const newVideoTrack = newStream.getVideoTracks()[0];
 			
-			// Replace video track in local stream
 			const oldVideoTrack = this.localStream.getVideoTracks()[0];
 			if (oldVideoTrack) {
 				this.localStream.removeTrack(oldVideoTrack);
 			}
 			this.localStream.addTrack(newVideoTrack);
 			
-			// Update local video element
 			this.elements.localVideo.srcObject = this.localStream;
 			
-			// Replace track in peer connection if active
-			if (this.pc) {
-				const sender = this.pc.getSenders().find(s => s.track?.kind === 'video');
+			// Replace track in all peer connections
+			for (const [, peer] of this.peers) {
+				const sender = peer.pc.getSenders().find(s => s.track?.kind === 'video');
 				if (sender) {
 					await sender.replaceTrack(newVideoTrack);
 				}
 			}
 			
-			// Apply current video enabled state to new track
 			newVideoTrack.enabled = this.isVideoEnabled;
-			
 		} catch (error) {
 			console.error('Failed to switch camera:', error);
-			// Revert facing mode on failure
 			this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
-			this.showError('Could not switch camera. Your device may not have multiple cameras.');
 		}
 	}
 	
-	hangUp() {
-		// Only send hang-up if we have an active connection
-		try {
-			if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-				this.ws.send(JSON.stringify({ type: 'hang-up' }));
-			}
-		} catch (error) {
-			console.error('Error sending hang-up:', error);
+	leaveCall() {
+		// Send leave message
+		if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+			this.ws.send(JSON.stringify({ type: 'leave-room' }));
 		}
 		
 		this.cleanup();
-		this.elements.endedReason.textContent = 'You ended the call.';
+		this.elements.endedTitle.textContent = 'Left Call';
+		this.elements.endedReason.textContent = 'You have left the call.';
+		this.elements.rejoinBtn.classList.remove('hidden');
 		this.showScreen('ended');
 	}
 	
-	cancelWaiting() {
-		this.cleanup();
-		this.showScreen('entry');
+	rejoinCall() {
+		if (this.roomId) {
+			this.directJoin(this.roomId);
+		}
 	}
 	
-	copyRoomCode() {
-		const copyText = (text) => {
-			// Try modern clipboard API first
-			if (navigator.clipboard && navigator.clipboard.writeText) {
-				return navigator.clipboard.writeText(text);
-			}
-			
-			// Fallback for older browsers
-			return new Promise((resolve, reject) => {
-				const textArea = document.createElement('textarea');
-				textArea.value = text;
-				textArea.style.position = 'fixed';
-				textArea.style.left = '-9999px';
-				document.body.appendChild(textArea);
-				textArea.select();
-				try {
-					document.execCommand('copy');
-					resolve();
-				} catch (err) {
-					reject(err);
-				} finally {
-					document.body.removeChild(textArea);
-				}
-			});
-		};
+	backToHome() {
+		this.roomId = null;
+		this.roomName = null;
 		
-		copyText(this.roomId)
-			.then(() => {
-				this.elements.copyHint.textContent = 'Copied!';
-				this.elements.copyHint.classList.add('copied');
-				setTimeout(() => {
-					this.elements.copyHint.textContent = 'Click to copy';
-					this.elements.copyHint.classList.remove('copied');
-				}, 2000);
-			})
-			.catch((err) => {
-				console.error('Failed to copy:', err);
-				this.elements.copyHint.textContent = 'Copy failed';
-				setTimeout(() => {
-					this.elements.copyHint.textContent = 'Click to copy';
-				}, 2000);
-			});
+		if (this.adminCode) {
+			this.showScreen('admin');
+			this.loadRooms();
+		} else {
+			this.showScreen('entry');
+		}
 	}
 	
 	cleanup() {
@@ -808,11 +829,12 @@ class VideoKall {
 			this.localStream = null;
 		}
 		
-		// Close peer connection
-		if (this.pc) {
-			this.pc.close();
-			this.pc = null;
+		// Close all peer connections
+		for (const [peerId] of this.peers) {
+			this.removePeer(peerId);
 		}
+		this.peers.clear();
+		this.pendingIceCandidates.clear();
 		
 		// Close WebSocket
 		if (this.ws) {
@@ -820,21 +842,16 @@ class VideoKall {
 			this.ws = null;
 		}
 		
-		// Clear video elements
+		// Clear videos grid
+		this.elements.videosGrid.innerHTML = '';
 		this.elements.localVideo.srcObject = null;
-		this.elements.remoteVideo.srcObject = null;
 		
 		// Reset state
-		this.roomId = null;
-		this.role = null;
+		this.participantId = null;
+		this.isHost = false;
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
 		this.facingMode = 'user';
-		this.codecPreference = 'av1';
-		this.pendingIceCandidates = [];
-		this.isRemoteDescriptionSet = false;
-		this.pendingOffer = null;
-		this.isMediaReady = false;
 		
 		// Reset UI
 		this.elements.toggleAudioBtn.classList.remove('muted');
@@ -845,12 +862,6 @@ class VideoKall {
 		this.elements.toggleVideoBtn.querySelector('.icon-video-off').classList.add('hidden');
 		this.elements.connectionStatus.classList.remove('connected', 'hidden');
 		this.elements.connectionStatus.textContent = 'Connecting...';
-	}
-	
-	backToHome() {
-		this.elements.specialCode.value = '';
-		this.elements.roomAddress.value = '';
-		this.showScreen('entry');
 	}
 	
 	makeVideoDraggable() {
@@ -876,7 +887,6 @@ class VideoKall {
 			const newLeft = startLeft + deltaX;
 			const newBottom = startBottom - deltaY;
 			
-			// Constrain to viewport
 			const maxLeft = window.innerWidth - video.offsetWidth - 24;
 			const maxBottom = window.innerHeight - video.offsetHeight - 120;
 			
@@ -890,7 +900,6 @@ class VideoKall {
 			video.style.cursor = 'move';
 		};
 		
-		// Mouse events
 		video.addEventListener('mousedown', (e) => {
 			onDragStart(e.clientX, e.clientY);
 		});
@@ -901,7 +910,6 @@ class VideoKall {
 		
 		document.addEventListener('mouseup', onDragEnd);
 		
-		// Touch events for mobile
 		video.addEventListener('touchstart', (e) => {
 			if (e.touches.length === 1) {
 				e.preventDefault();
@@ -926,4 +934,3 @@ class VideoKall {
 document.addEventListener('DOMContentLoaded', () => {
 	window.videoKall = new VideoKall();
 });
-

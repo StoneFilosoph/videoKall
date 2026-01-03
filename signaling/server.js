@@ -10,7 +10,6 @@ const EXTERNAL_IP = process.env.EXTERNAL_IP || '';
 const TURN_TLS_ENABLED = process.env.TURN_TLS_ENABLED === 'true';
 
 // Determine TURN server URL for clients
-// Priority: TURN_SERVER_PUBLIC > construct from EXTERNAL_IP > localhost fallback
 function getTurnServerPublic() {
 	if (process.env.TURN_SERVER_PUBLIC) {
 		return process.env.TURN_SERVER_PUBLIC;
@@ -27,7 +26,8 @@ if (TURN_SERVER_PUBLIC) {
 	console.log(`TURN server for clients: ${TURN_SERVER_PUBLIC}`);
 }
 
-// Store active rooms: Map<roomId, { host: WebSocket, guest: WebSocket, createdAt: Date, codec: string }>
+// Store rooms: Map<roomId, { name: string, createdAt: Date, participants: Map<odea, WebSocket>, hostId: string|null }>
+// Rooms persist until deleted by admin or server restart
 const rooms = new Map();
 
 // Generate a random room ID (12 chars, formatted as xxxx-xxxx-xxxx)
@@ -40,33 +40,155 @@ function generateRoomId() {
 	return `${id.slice(0, 4)}-${id.slice(4, 8)}-${id.slice(8, 12)}`;
 }
 
-// Clean up expired rooms (older than 24 hours)
-function cleanupRooms() {
-	const now = Date.now();
-	const maxAge = 24 * 60 * 60 * 1000; // 24 hours
-	
-	for (const [roomId, room] of rooms.entries()) {
-		if (now - room.createdAt > maxAge) {
-			if (room.host) room.host.close();
-			if (room.guest) room.guest.close();
-			rooms.delete(roomId);
-			console.log(`Room ${roomId} expired and removed`);
-		}
-	}
+// Generate unique participant ID
+function generateParticipantId() {
+	return crypto.randomBytes(8).toString('hex');
 }
 
-// Run cleanup every hour
-setInterval(cleanupRooms, 60 * 60 * 1000);
-
-// Create HTTP server for health checks
+// Create HTTP server
 const server = http.createServer((req, res) => {
-	if (req.url === '/health') {
+	// Enable CORS
+	res.setHeader('Access-Control-Allow-Origin', '*');
+	res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+	res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-Admin-Code');
+	
+	if (req.method === 'OPTIONS') {
+		res.writeHead(200);
+		res.end();
+		return;
+	}
+	
+	const url = new URL(req.url, `http://${req.headers.host}`);
+	
+	// Health check
+	if (req.method === 'GET' && url.pathname === '/health') {
 		res.writeHead(200, { 'Content-Type': 'application/json' });
 		res.end(JSON.stringify({ status: 'ok', rooms: rooms.size }));
-	} else {
-		res.writeHead(404);
-		res.end();
+		return;
 	}
+	
+	// Admin API - requires special code
+	if (url.pathname.startsWith('/api/admin/')) {
+		const adminCode = req.headers['x-admin-code'];
+		if (adminCode !== SPECIAL_CODE) {
+			res.writeHead(401, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ error: 'Invalid admin code' }));
+			return;
+		}
+		
+		// GET /api/admin/rooms - List all rooms
+		if (req.method === 'GET' && url.pathname === '/api/admin/rooms') {
+			const roomList = [];
+			for (const [roomId, room] of rooms.entries()) {
+				roomList.push({
+					id: roomId,
+					name: room.name,
+					createdAt: room.createdAt,
+					participantCount: room.participants.size,
+					hasHost: room.hostId !== null
+				});
+			}
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ rooms: roomList }));
+			return;
+		}
+		
+		// POST /api/admin/rooms - Create a new room
+		if (req.method === 'POST' && url.pathname === '/api/admin/rooms') {
+			let body = '';
+			req.on('data', chunk => body += chunk);
+			req.on('end', () => {
+				let data = {};
+				try {
+					if (body) data = JSON.parse(body);
+				} catch (e) {
+					res.writeHead(400, { 'Content-Type': 'application/json' });
+					res.end(JSON.stringify({ error: 'Invalid JSON' }));
+					return;
+				}
+				
+				const name = data.name || 'Unnamed Room';
+				
+				// Generate unique room ID
+				let roomId;
+				do {
+					roomId = generateRoomId();
+				} while (rooms.has(roomId));
+				
+				// Create room
+				rooms.set(roomId, {
+					name: name,
+					createdAt: Date.now(),
+					participants: new Map(),
+					hostId: null
+				});
+				
+				console.log(`Room created: ${roomId} (${name})`);
+				
+				res.writeHead(201, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({
+					id: roomId,
+					name: name,
+					createdAt: rooms.get(roomId).createdAt
+				}));
+			});
+			return;
+		}
+		
+		// DELETE /api/admin/rooms/:roomId - Delete a room
+		const deleteMatch = url.pathname.match(/^\/api\/admin\/rooms\/([a-z0-9-]+)$/);
+		if (req.method === 'DELETE' && deleteMatch) {
+			const roomId = deleteMatch[1];
+			const room = rooms.get(roomId);
+			
+			if (!room) {
+				res.writeHead(404, { 'Content-Type': 'application/json' });
+				res.end(JSON.stringify({ error: 'Room not found' }));
+				return;
+			}
+			
+			// Disconnect all participants
+			for (const [, ws] of room.participants) {
+				if (ws.readyState === WebSocket.OPEN) {
+					ws.send(JSON.stringify({ type: 'room-deleted' }));
+					ws.close();
+				}
+			}
+			
+			rooms.delete(roomId);
+			console.log(`Room deleted: ${roomId}`);
+			
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ success: true }));
+			return;
+		}
+		
+		res.writeHead(404, { 'Content-Type': 'application/json' });
+		res.end(JSON.stringify({ error: 'Not found' }));
+		return;
+	}
+	
+	// Check if room exists (for direct join validation)
+	if (req.method === 'GET' && url.pathname.startsWith('/api/room/')) {
+		const roomId = url.pathname.replace('/api/room/', '');
+		const room = rooms.get(roomId);
+		
+		if (room) {
+			res.writeHead(200, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({
+				exists: true,
+				name: room.name,
+				participantCount: room.participants.size
+			}));
+		} else {
+			res.writeHead(404, { 'Content-Type': 'application/json' });
+			res.end(JSON.stringify({ exists: false }));
+		}
+		return;
+	}
+	
+	res.writeHead(404);
+	res.end();
 });
 
 // Create WebSocket server
@@ -75,16 +197,13 @@ const wss = new WebSocket.Server({ server });
 // Get ICE server configuration
 function getIceServers() {
 	const servers = [
-		// Public STUN servers (highest priority)
 		{ urls: 'stun:stun.l.google.com:19302' },
 		{ urls: 'stun:stun1.l.google.com:19302' }
 	];
 	
-	// Only add self-hosted TURN server if we have a public URL
 	if (TURN_SERVER_PUBLIC) {
 		const turnUrls = [TURN_SERVER_PUBLIC];
 		
-		// Only add TURNS (TLS) URL if explicitly enabled
 		if (TURN_TLS_ENABLED) {
 			const turnsUrl = TURN_SERVER_PUBLIC.replace('turn:', 'turns:').replace(':3478', ':5349');
 			turnUrls.push(turnsUrl);
@@ -100,12 +219,58 @@ function getIceServers() {
 	return servers;
 }
 
+// Broadcast to all participants in a room except sender
+function broadcastToRoom(roomId, message, excludeId = null) {
+	const room = rooms.get(roomId);
+	if (!room) return;
+	
+	const msgStr = JSON.stringify(message);
+	for (const [participantId, ws] of room.participants) {
+		if (participantId !== excludeId && ws.readyState === WebSocket.OPEN) {
+			ws.send(msgStr);
+		}
+	}
+}
+
+// Send to specific participant
+function sendToParticipant(roomId, targetId, message) {
+	const room = rooms.get(roomId);
+	if (!room) return;
+	
+	const ws = room.participants.get(targetId);
+	if (ws && ws.readyState === WebSocket.OPEN) {
+		ws.send(JSON.stringify(message));
+	}
+}
+
+// Elect new host when current host leaves
+function electNewHost(room) {
+	// Pick first available participant as new host
+	for (const [participantId, ws] of room.participants) {
+		if (ws.readyState === WebSocket.OPEN) {
+			room.hostId = participantId;
+			ws.send(JSON.stringify({ type: 'you-are-host' }));
+			
+			// Notify all others about new host
+			broadcastToRoom(ws.roomId, {
+				type: 'new-host',
+				hostId: participantId
+			}, participantId);
+			
+			console.log(`New host elected: ${participantId} in room ${ws.roomId}`);
+			return true;
+		}
+	}
+	room.hostId = null;
+	return false;
+}
+
 wss.on('connection', (ws) => {
 	console.log('New WebSocket connection');
 	
 	ws.isAlive = true;
 	ws.roomId = null;
-	ws.role = null; // 'host' or 'guest'
+	ws.participantId = null;
 	
 	ws.on('pong', () => {
 		ws.isAlive = true;
@@ -123,9 +288,6 @@ wss.on('connection', (ws) => {
 		console.log('Received:', message.type);
 		
 		switch (message.type) {
-			case 'create-room':
-				handleCreateRoom(ws, message);
-				break;
 			case 'join-room':
 				handleJoinRoom(ws, message);
 				break;
@@ -134,8 +296,8 @@ wss.on('connection', (ws) => {
 			case 'ice-candidate':
 				handleSignaling(ws, message);
 				break;
-			case 'hang-up':
-				handleHangUp(ws);
+			case 'leave-room':
+				handleLeaveRoom(ws);
 				break;
 			default:
 				console.log('Unknown message type:', message.type);
@@ -150,45 +312,6 @@ wss.on('connection', (ws) => {
 		console.error('WebSocket error:', error);
 	});
 });
-
-function handleCreateRoom(ws, message) {
-	// Verify special code
-	if (message.code !== SPECIAL_CODE) {
-		ws.send(JSON.stringify({
-			type: 'error',
-			message: 'Invalid special code'
-		}));
-		return;
-	}
-	
-	// Generate unique room ID
-	let roomId;
-	do {
-		roomId = generateRoomId();
-	} while (rooms.has(roomId));
-	
-	// Get codec preference from host (default to 'av1')
-	const codec = message.codec || 'av1';
-	
-	// Create room
-	rooms.set(roomId, {
-		host: ws,
-		guest: null,
-		createdAt: Date.now(),
-		codec: codec
-	});
-	
-	ws.roomId = roomId;
-	ws.role = 'host';
-	
-	ws.send(JSON.stringify({
-		type: 'room-created',
-		roomId: roomId,
-		iceServers: getIceServers()
-	}));
-	
-	console.log(`Room ${roomId} created with codec preference: ${codec}`);
-}
 
 function handleJoinRoom(ws, message) {
 	const roomId = message.roomId?.toLowerCase().trim();
@@ -206,73 +329,104 @@ function handleJoinRoom(ws, message) {
 	if (!room) {
 		ws.send(JSON.stringify({
 			type: 'error',
-			message: 'Room not found. Please check the calling address.'
+			message: 'Room not found. It may have been deleted.'
 		}));
 		return;
 	}
 	
-	if (room.guest) {
-		ws.send(JSON.stringify({
-			type: 'error',
-			message: 'Room is full. This is a 1:1 call.'
-		}));
-		return;
-	}
-	
-	// Join as guest
-	room.guest = ws;
+	// Generate participant ID
+	const participantId = generateParticipantId();
+	ws.participantId = participantId;
 	ws.roomId = roomId;
-	ws.role = 'guest';
 	
-	// Notify guest they joined (include host's codec preference)
+	// Add to room
+	room.participants.set(participantId, ws);
+	
+	// First person to join becomes host
+	const isHost = room.hostId === null;
+	if (isHost) {
+		room.hostId = participantId;
+	}
+	
+	// Get list of existing participants (for mesh connections)
+	const existingParticipants = [];
+	for (const [pId, pWs] of room.participants) {
+		if (pId !== participantId && pWs.readyState === WebSocket.OPEN) {
+			existingParticipants.push(pId);
+		}
+	}
+	
+	// Notify the new participant
 	ws.send(JSON.stringify({
 		type: 'room-joined',
 		roomId: roomId,
-		iceServers: getIceServers(),
-		codec: room.codec
+		roomName: room.name,
+		participantId: participantId,
+		isHost: isHost,
+		existingParticipants: existingParticipants,
+		iceServers: getIceServers()
 	}));
 	
-	// Notify host that guest has joined
-	if (room.host && room.host.readyState === WebSocket.OPEN) {
-		room.host.send(JSON.stringify({
-			type: 'guest-joined'
-		}));
-	}
+	// Notify existing participants about the new joiner
+	broadcastToRoom(roomId, {
+		type: 'participant-joined',
+		participantId: participantId
+	}, participantId);
 	
-	console.log(`Guest joined room ${roomId}`);
+	console.log(`Participant ${participantId} joined room ${roomId} (host: ${isHost}, total: ${room.participants.size})`);
 }
 
 function handleSignaling(ws, message) {
 	const room = rooms.get(ws.roomId);
 	if (!room) return;
 	
-	// Forward to the other peer
-	const target = ws.role === 'host' ? room.guest : room.host;
+	const targetId = message.targetId;
 	
-	if (target && target.readyState === WebSocket.OPEN) {
-		target.send(JSON.stringify({
+	if (targetId) {
+		// Send to specific participant
+		sendToParticipant(ws.roomId, targetId, {
 			type: message.type,
-			data: message.data
-		}));
+			data: message.data,
+			fromId: ws.participantId
+		});
+	} else {
+		// Broadcast to all (fallback)
+		broadcastToRoom(ws.roomId, {
+			type: message.type,
+			data: message.data,
+			fromId: ws.participantId
+		}, ws.participantId);
 	}
 }
 
-function handleHangUp(ws) {
+function handleLeaveRoom(ws) {
+	if (!ws.roomId) return;
+	
 	const room = rooms.get(ws.roomId);
 	if (!room) return;
 	
-	// Notify the other peer
-	const target = ws.role === 'host' ? room.guest : room.host;
+	const wasHost = room.hostId === ws.participantId;
 	
-	if (target && target.readyState === WebSocket.OPEN) {
-		target.send(JSON.stringify({
-			type: 'peer-disconnected'
-		}));
+	// Remove from room
+	room.participants.delete(ws.participantId);
+	
+	// Notify others
+	broadcastToRoom(ws.roomId, {
+		type: 'participant-left',
+		participantId: ws.participantId
+	});
+	
+	console.log(`Participant ${ws.participantId} left room ${ws.roomId}`);
+	
+	// If host left, elect new host
+	if (wasHost && room.participants.size > 0) {
+		electNewHost(room);
 	}
 	
-	// Clean up room
-	rooms.delete(ws.roomId);
-	console.log(`Room ${ws.roomId} closed due to hang-up`);
+	// Room persists even if empty (until admin deletes or server restarts)
+	
+	ws.roomId = null;
+	ws.participantId = null;
 }
 
 function handleDisconnect(ws) {
@@ -281,24 +435,25 @@ function handleDisconnect(ws) {
 	const room = rooms.get(ws.roomId);
 	if (!room) return;
 	
-	// Notify the other peer
-	const target = ws.role === 'host' ? room.guest : room.host;
+	const wasHost = room.hostId === ws.participantId;
 	
-	if (target && target.readyState === WebSocket.OPEN) {
-		target.send(JSON.stringify({
-			type: 'peer-disconnected'
-		}));
+	// Remove from room
+	room.participants.delete(ws.participantId);
+	
+	// Notify others
+	broadcastToRoom(ws.roomId, {
+		type: 'participant-left',
+		participantId: ws.participantId
+	});
+	
+	console.log(`Participant ${ws.participantId} disconnected from room ${ws.roomId} (remaining: ${room.participants.size})`);
+	
+	// If host disconnected, elect new host
+	if (wasHost && room.participants.size > 0) {
+		electNewHost(room);
 	}
 	
-	// If host disconnects, remove the room
-	// If guest disconnects, keep the room for potential reconnection
-	if (ws.role === 'host') {
-		rooms.delete(ws.roomId);
-		console.log(`Room ${ws.roomId} closed (host disconnected)`);
-	} else {
-		room.guest = null;
-		console.log(`Guest left room ${ws.roomId}`);
-	}
+	// Room persists even if empty
 }
 
 // Ping clients to detect disconnections
@@ -318,6 +473,5 @@ wss.on('close', () => {
 
 server.listen(PORT, () => {
 	console.log(`Signaling server running on port ${PORT}`);
-	console.log(`Special code configured: ${SPECIAL_CODE ? 'Yes' : 'No (using default)'}`);
+	console.log(`Admin code configured: ${SPECIAL_CODE ? 'Yes' : 'No (using default)'}`);
 });
-
