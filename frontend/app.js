@@ -12,6 +12,7 @@ class VideoKall {
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
 		this.facingMode = 'user'; // 'user' = front, 'environment' = back
+		this.codecPreference = 'av1'; // 'av1' or 'standard'
 		
 		// Queue for ICE candidates that arrive before remote description is set
 		this.pendingIceCandidates = [];
@@ -36,6 +37,7 @@ class VideoKall {
 		this.elements = {
 			specialCode: document.getElementById('special-code'),
 			roomAddress: document.getElementById('room-address'),
+			codecOptions: document.querySelectorAll('input[name="codec"]'),
 			createRoomBtn: document.getElementById('create-room-btn'),
 			joinRoomBtn: document.getElementById('join-room-btn'),
 			displayRoomCode: document.getElementById('display-room-code'),
@@ -271,6 +273,15 @@ class VideoKall {
 		}
 	}
 	
+	getSelectedCodec() {
+		for (const option of this.elements.codecOptions) {
+			if (option.checked) {
+				return option.value;
+			}
+		}
+		return 'av1'; // default
+	}
+	
 	async createRoom() {
 		const code = this.elements.specialCode.value.trim();
 		if (!code) {
@@ -278,11 +289,15 @@ class VideoKall {
 			return;
 		}
 		
+		// Get selected codec preference
+		this.codecPreference = this.getSelectedCodec();
+		
 		try {
 			await this.connectWebSocket();
 			this.ws.send(JSON.stringify({
 				type: 'create-room',
-				code: code
+				code: code,
+				codec: this.codecPreference
 			}));
 		} catch (error) {
 			this.showError(error.message);
@@ -314,6 +329,7 @@ class VideoKall {
 		this.roomId = message.roomId;
 		this.role = 'host';
 		this.iceServers = message.iceServers;
+		// Codec preference already set when creating room
 		
 		this.elements.displayRoomCode.textContent = this.roomId;
 		this.showScreen('waiting');
@@ -323,6 +339,9 @@ class VideoKall {
 		this.roomId = message.roomId;
 		this.role = 'guest';
 		this.iceServers = message.iceServers;
+		// Use codec preference set by host
+		this.codecPreference = message.codec || 'standard';
+		console.log('Using codec preference from host:', this.codecPreference);
 		
 		// Guest initiates the call
 		try {
@@ -417,6 +436,9 @@ class VideoKall {
 			this.pc.addTrack(track, this.localStream);
 		});
 		
+		// Apply codec preference
+		this.applyCodecPreference();
+		
 		// Handle remote tracks
 		this.pc.ontrack = (event) => {
 			console.log('Remote track received');
@@ -457,6 +479,68 @@ class VideoKall {
 				this.pc.restartIce();
 			}
 		};
+	}
+	
+	applyCodecPreference() {
+		if (!this.pc) return;
+		
+		const transceivers = this.pc.getTransceivers();
+		
+		for (const transceiver of transceivers) {
+			if (transceiver.sender.track?.kind === 'video') {
+				try {
+					// Get available codecs
+					const capabilities = RTCRtpReceiver.getCapabilities?.('video');
+					if (!capabilities || !capabilities.codecs) {
+						console.log('Codec capabilities not available, using browser defaults');
+						return;
+					}
+					
+					const codecs = capabilities.codecs;
+					let sortedCodecs;
+					
+					if (this.codecPreference === 'av1') {
+						// Prefer AV1 > VP9 > VP8 > H.264
+						sortedCodecs = this.sortCodecsByPreference(codecs, ['AV1', 'VP9', 'VP8', 'H264']);
+						console.log('Applied AV1-preferred codec order');
+					} else {
+						// Standard: VP8 > H.264 > VP9 > AV1 (maximum compatibility)
+						sortedCodecs = this.sortCodecsByPreference(codecs, ['VP8', 'H264', 'VP9', 'AV1']);
+						console.log('Applied standard codec order');
+					}
+					
+					transceiver.setCodecPreferences(sortedCodecs);
+				} catch (error) {
+					console.warn('Could not set codec preferences:', error);
+				}
+			}
+		}
+	}
+	
+	sortCodecsByPreference(codecs, preferredOrder) {
+		return [...codecs].sort((a, b) => {
+			const aMime = a.mimeType.toLowerCase();
+			const bMime = b.mimeType.toLowerCase();
+			
+			let aIndex = preferredOrder.length;
+			let bIndex = preferredOrder.length;
+			
+			for (let i = 0; i < preferredOrder.length; i++) {
+				if (aMime.includes(preferredOrder[i].toLowerCase())) {
+					aIndex = i;
+					break;
+				}
+			}
+			
+			for (let i = 0; i < preferredOrder.length; i++) {
+				if (bMime.includes(preferredOrder[i].toLowerCase())) {
+					bIndex = i;
+					break;
+				}
+			}
+			
+			return aIndex - bIndex;
+		});
 	}
 	
 	updateConnectionStatus(state) {
@@ -746,6 +830,7 @@ class VideoKall {
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
 		this.facingMode = 'user';
+		this.codecPreference = 'av1';
 		this.pendingIceCandidates = [];
 		this.isRemoteDescriptionSet = false;
 		this.pendingOffer = null;

@@ -27,7 +27,7 @@ if (TURN_SERVER_PUBLIC) {
 	console.log(`TURN server for clients: ${TURN_SERVER_PUBLIC}`);
 }
 
-// Store active rooms: Map<roomId, { host: WebSocket, guest: WebSocket, createdAt: Date }>
+// Store active rooms: Map<roomId, { host: WebSocket, guest: WebSocket, createdAt: Date, codec: string }>
 const rooms = new Map();
 
 // Generate a random room ID (12 chars, formatted as xxxx-xxxx-xxxx)
@@ -167,11 +167,15 @@ function handleCreateRoom(ws, message) {
 		roomId = generateRoomId();
 	} while (rooms.has(roomId));
 	
+	// Get codec preference from host (default to 'av1')
+	const codec = message.codec || 'av1';
+	
 	// Create room
 	rooms.set(roomId, {
 		host: ws,
 		guest: null,
-		createdAt: Date.now()
+		createdAt: Date.now(),
+		codec: codec
 	});
 	
 	ws.roomId = roomId;
@@ -183,7 +187,7 @@ function handleCreateRoom(ws, message) {
 		iceServers: getIceServers()
 	}));
 	
-	console.log(`Room ${roomId} created`);
+	console.log(`Room ${roomId} created with codec preference: ${codec}`);
 }
 
 function handleJoinRoom(ws, message) {
@@ -220,11 +224,12 @@ function handleJoinRoom(ws, message) {
 	ws.roomId = roomId;
 	ws.role = 'guest';
 	
-	// Notify guest they joined
+	// Notify guest they joined (include host's codec preference)
 	ws.send(JSON.stringify({
 		type: 'room-joined',
 		roomId: roomId,
-		iceServers: getIceServers()
+		iceServers: getIceServers(),
+		codec: room.codec
 	}));
 	
 	// Notify host that guest has joined

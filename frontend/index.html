@@ -36,6 +36,21 @@
 						</div>
 						<h3>Start a Call</h3>
 						<p>Create a new room with your special code</p>
+						<div class="codec-selector">
+							<label class="codec-label">Video Quality:</label>
+							<div class="codec-options">
+								<label class="codec-option">
+									<input type="radio" name="codec" value="av1" checked>
+									<span class="codec-badge av1">AV1</span>
+									<span class="codec-desc">Best quality (modern devices)</span>
+								</label>
+								<label class="codec-option">
+									<input type="radio" name="codec" value="standard">
+									<span class="codec-badge standard">Standard</span>
+									<span class="codec-desc">Maximum compatibility</span>
+								</label>
+							</div>
+						</div>
 						<div class="input-group">
 							<input type="password" id="special-code" placeholder="Enter special code" autocomplete="off">
 							<button id="create-room-btn" class="btn primary">Create Room</button>

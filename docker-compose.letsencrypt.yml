@@ -1,0 +1,83 @@
+version: '3'
+
+# Let's Encrypt version - use this for production with a domain name
+# Usage: docker-compose -f docker-compose.letsencrypt.yml up -d
+
+services:
+  # Nginx with Certbot for automatic SSL
+  web:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./frontend:/usr/share/nginx/html:ro
+      - ./nginx/nginx-letsencrypt.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/certs:/etc/nginx/certs:ro
+      - certbot-webroot:/var/www/certbot:ro
+      - letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - signaling
+    restart: unless-stopped
+    networks:
+      - videokall
+
+  # Certbot for SSL certificate renewal
+  certbot:
+    image: certbot/certbot
+    volumes:
+      - certbot-webroot:/var/www/certbot
+      - letsencrypt:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
+    restart: unless-stopped
+    networks:
+      - videokall
+
+  # Node.js signaling server
+  signaling:
+    build: ./signaling
+    environment:
+      - SPECIAL_CODE=${SPECIAL_CODE}
+      - PORT=3000
+      - TURN_USERNAME=${TURN_USERNAME}
+      - TURN_PASSWORD=${TURN_PASSWORD}
+      - EXTERNAL_IP=${EXTERNAL_IP}
+      - TURN_SERVER_PUBLIC=${TURN_SERVER_PUBLIC}
+      - TURN_TLS_ENABLED=${TURN_TLS_ENABLED}
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - videokall
+
+  # Coturn TURN/STUN server
+  turnserver:
+    build: ./turnserver
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "5349:5349/udp"
+      - "5349:5349/tcp"
+      - "49152-49200:49152-49200/udp"
+    environment:
+      - TURN_USERNAME=${TURN_USERNAME}
+      - TURN_PASSWORD=${TURN_PASSWORD}
+      - TURN_REALM=${TURN_REALM}
+      - EXTERNAL_IP=${EXTERNAL_IP}
+    restart: unless-stopped
+    networks:
+      - videokall
+
+networks:
+  videokall:
+    driver: bridge
+
+volumes:
+  certbot-webroot:
+  letsencrypt:
