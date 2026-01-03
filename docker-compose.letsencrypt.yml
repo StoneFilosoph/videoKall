@@ -14,8 +14,8 @@ services:
       - ./frontend:/usr/share/nginx/html:ro
       - ./nginx/nginx-letsencrypt.conf:/etc/nginx/nginx.conf:ro
       - ./nginx/certs:/etc/nginx/certs:ro
-      - certbot-webroot:/var/www/certbot:ro
-      - letsencrypt:/etc/letsencrypt:ro
+      - ./certbot-webroot:/var/www/certbot:ro
+      - ./letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - signaling
     restart: unless-stopped
@@ -26,8 +26,8 @@ services:
   certbot:
     image: certbot/certbot
     volumes:
-      - certbot-webroot:/var/www/certbot
-      - letsencrypt:/etc/letsencrypt
+      - ./certbot-webroot:/var/www/certbot
+      - ./letsencrypt:/etc/letsencrypt
     entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
     restart: unless-stopped
     networks:
@@ -44,6 +44,9 @@ services:
       - EXTERNAL_IP=${EXTERNAL_IP}
       - TURN_SERVER_PUBLIC=${TURN_SERVER_PUBLIC}
       - TURN_TLS_ENABLED=${TURN_TLS_ENABLED}
+      - DB_PATH=/app/data/rooms.db
+    volumes:
+      - signaling-data:/app/data
     expose:
       - "3000"
     healthcheck:
@@ -79,5 +82,4 @@ networks:
     driver: bridge
 
 volumes:
-  certbot-webroot:
-  letsencrypt:
+  signaling-data:

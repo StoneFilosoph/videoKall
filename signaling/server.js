@@ -1,6 +1,7 @@
 const http = require('http');
 const WebSocket = require('ws');
 const crypto = require('crypto');
+const db = require('./db');
 
 const PORT = process.env.PORT || 3000;
 const SPECIAL_CODE = process.env.SPECIAL_CODE || 'FAMILY2024';
@@ -8,6 +9,9 @@ const TURN_USERNAME = process.env.TURN_USERNAME || 'videokall';
 const TURN_PASSWORD = process.env.TURN_PASSWORD || 'videokall123';
 const EXTERNAL_IP = process.env.EXTERNAL_IP || '';
 const TURN_TLS_ENABLED = process.env.TURN_TLS_ENABLED === 'true';
+
+// Initialize database
+db.init();
 
 // Determine TURN server URL for clients
 function getTurnServerPublic() {
@@ -26,9 +30,20 @@ if (TURN_SERVER_PUBLIC) {
 	console.log(`TURN server for clients: ${TURN_SERVER_PUBLIC}`);
 }
 
-// Store rooms: Map<roomId, { name: string, createdAt: Date, participants: Map<odea, WebSocket>, hostId: string|null }>
-// Rooms persist until deleted by admin or server restart
-const rooms = new Map();
+// In-memory store for active participants (not persisted)
+// Map<roomId, { participants: Map<participantId, WebSocket>, hostId: string|null }>
+const activeRooms = new Map();
+
+// Get or create in-memory room state for an existing DB room
+function getActiveRoom(roomId) {
+	if (!activeRooms.has(roomId)) {
+		activeRooms.set(roomId, {
+			participants: new Map(),
+			hostId: null
+		});
+	}
+	return activeRooms.get(roomId);
+}
 
 // Generate a random room ID (12 chars, formatted as xxxx-xxxx-xxxx)
 function generateRoomId() {
@@ -63,7 +78,7 @@ const server = http.createServer((req, res) => {
 	// Health check
 	if (req.method === 'GET' && url.pathname === '/health') {
 		res.writeHead(200, { 'Content-Type': 'application/json' });
-		res.end(JSON.stringify({ status: 'ok', rooms: rooms.size }));
+		res.end(JSON.stringify({ status: 'ok', rooms: db.getAllRooms().length }));
 		return;
 	}
 	
@@ -78,16 +93,17 @@ const server = http.createServer((req, res) => {
 		
 		// GET /api/admin/rooms - List all rooms
 		if (req.method === 'GET' && url.pathname === '/api/admin/rooms') {
-			const roomList = [];
-			for (const [roomId, room] of rooms.entries()) {
-				roomList.push({
-					id: roomId,
+			const dbRooms = db.getAllRooms();
+			const roomList = dbRooms.map(room => {
+				const active = activeRooms.get(room.id);
+				return {
+					id: room.id,
 					name: room.name,
-					createdAt: room.createdAt,
-					participantCount: room.participants.size,
-					hasHost: room.hostId !== null
-				});
-			}
+					createdAt: room.created_at,
+					participantCount: active ? active.participants.size : 0,
+					hasHost: active ? active.hostId !== null : false
+				};
+			});
 			res.writeHead(200, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({ rooms: roomList }));
 			return;
@@ -113,23 +129,18 @@ const server = http.createServer((req, res) => {
 				let roomId;
 				do {
 					roomId = generateRoomId();
-				} while (rooms.has(roomId));
+				} while (db.roomExists(roomId));
 				
-				// Create room
-				rooms.set(roomId, {
-					name: name,
-					createdAt: Date.now(),
-					participants: new Map(),
-					hostId: null
-				});
+				// Create room in database (persistent)
+				const room = db.createRoom(roomId, name);
 				
 				console.log(`Room created: ${roomId} (${name})`);
 				
 				res.writeHead(201, { 'Content-Type': 'application/json' });
 				res.end(JSON.stringify({
-					id: roomId,
-					name: name,
-					createdAt: rooms.get(roomId).createdAt
+					id: room.id,
+					name: room.name,
+					createdAt: room.createdAt
 				}));
 			});
 			return;
@@ -139,23 +150,28 @@ const server = http.createServer((req, res) => {
 		const deleteMatch = url.pathname.match(/^\/api\/admin\/rooms\/([a-z0-9-]+)$/);
 		if (req.method === 'DELETE' && deleteMatch) {
 			const roomId = deleteMatch[1];
-			const room = rooms.get(roomId);
 			
-			if (!room) {
+			// Check if room exists in database
+			if (!db.roomExists(roomId)) {
 				res.writeHead(404, { 'Content-Type': 'application/json' });
 				res.end(JSON.stringify({ error: 'Room not found' }));
 				return;
 			}
 			
-			// Disconnect all participants
-			for (const [, ws] of room.participants) {
-				if (ws.readyState === WebSocket.OPEN) {
-					ws.send(JSON.stringify({ type: 'room-deleted' }));
-					ws.close();
+			// Disconnect all active participants
+			const active = activeRooms.get(roomId);
+			if (active) {
+				for (const [, ws] of active.participants) {
+					if (ws.readyState === WebSocket.OPEN) {
+						ws.send(JSON.stringify({ type: 'room-deleted' }));
+						ws.close();
+					}
 				}
+				activeRooms.delete(roomId);
 			}
 			
-			rooms.delete(roomId);
+			// Delete from database
+			db.deleteRoom(roomId);
 			console.log(`Room deleted: ${roomId}`);
 			
 			res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -171,14 +187,15 @@ const server = http.createServer((req, res) => {
 	// Check if room exists (for direct join validation)
 	if (req.method === 'GET' && url.pathname.startsWith('/api/room/')) {
 		const roomId = url.pathname.replace('/api/room/', '');
-		const room = rooms.get(roomId);
+		const room = db.getRoom(roomId);
 		
 		if (room) {
+			const active = activeRooms.get(roomId);
 			res.writeHead(200, { 'Content-Type': 'application/json' });
 			res.end(JSON.stringify({
 				exists: true,
 				name: room.name,
-				participantCount: room.participants.size
+				participantCount: active ? active.participants.size : 0
 			}));
 		} else {
 			res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -221,7 +238,7 @@ function getIceServers() {
 
 // Broadcast to all participants in a room except sender
 function broadcastToRoom(roomId, message, excludeId = null) {
-	const room = rooms.get(roomId);
+	const room = activeRooms.get(roomId);
 	if (!room) return;
 	
 	const msgStr = JSON.stringify(message);
@@ -234,7 +251,7 @@ function broadcastToRoom(roomId, message, excludeId = null) {
 
 // Send to specific participant
 function sendToParticipant(roomId, targetId, message) {
-	const room = rooms.get(roomId);
+	const room = activeRooms.get(roomId);
 	if (!room) return;
 	
 	const ws = room.participants.get(targetId);
@@ -324,15 +341,19 @@ function handleJoinRoom(ws, message) {
 		return;
 	}
 	
-	const room = rooms.get(roomId);
+	// Check if room exists in database
+	const dbRoom = db.getRoom(roomId);
 	
-	if (!room) {
+	if (!dbRoom) {
 		ws.send(JSON.stringify({
 			type: 'error',
 			message: 'Room not found. It may have been deleted.'
 		}));
 		return;
 	}
+	
+	// Get or create active room state
+	const room = getActiveRoom(roomId);
 	
 	// Generate participant ID
 	const participantId = generateParticipantId();
@@ -360,7 +381,7 @@ function handleJoinRoom(ws, message) {
 	ws.send(JSON.stringify({
 		type: 'room-joined',
 		roomId: roomId,
-		roomName: room.name,
+		roomName: dbRoom.name,
 		participantId: participantId,
 		isHost: isHost,
 		existingParticipants: existingParticipants,
@@ -377,7 +398,7 @@ function handleJoinRoom(ws, message) {
 }
 
 function handleSignaling(ws, message) {
-	const room = rooms.get(ws.roomId);
+	const room = activeRooms.get(ws.roomId);
 	if (!room) return;
 	
 	const targetId = message.targetId;
@@ -402,7 +423,7 @@ function handleSignaling(ws, message) {
 function handleLeaveRoom(ws) {
 	if (!ws.roomId) return;
 	
-	const room = rooms.get(ws.roomId);
+	const room = activeRooms.get(ws.roomId);
 	if (!room) return;
 	
 	const wasHost = room.hostId === ws.participantId;
@@ -423,7 +444,10 @@ function handleLeaveRoom(ws) {
 		electNewHost(room);
 	}
 	
-	// Room persists even if empty (until admin deletes or server restarts)
+	// Clean up empty active rooms (but keep in database for persistence)
+	if (room.participants.size === 0) {
+		activeRooms.delete(ws.roomId);
+	}
 	
 	ws.roomId = null;
 	ws.participantId = null;
@@ -432,28 +456,32 @@ function handleLeaveRoom(ws) {
 function handleDisconnect(ws) {
 	if (!ws.roomId) return;
 	
-	const room = rooms.get(ws.roomId);
+	const room = activeRooms.get(ws.roomId);
 	if (!room) return;
 	
 	const wasHost = room.hostId === ws.participantId;
+	const roomId = ws.roomId;
 	
 	// Remove from room
 	room.participants.delete(ws.participantId);
 	
 	// Notify others
-	broadcastToRoom(ws.roomId, {
+	broadcastToRoom(roomId, {
 		type: 'participant-left',
 		participantId: ws.participantId
 	});
 	
-	console.log(`Participant ${ws.participantId} disconnected from room ${ws.roomId} (remaining: ${room.participants.size})`);
+	console.log(`Participant ${ws.participantId} disconnected from room ${roomId} (remaining: ${room.participants.size})`);
 	
 	// If host disconnected, elect new host
 	if (wasHost && room.participants.size > 0) {
 		electNewHost(room);
 	}
 	
-	// Room persists even if empty
+	// Clean up empty active rooms (but keep in database for persistence)
+	if (room.participants.size === 0) {
+		activeRooms.delete(roomId);
+	}
 }
 
 // Ping clients to detect disconnections

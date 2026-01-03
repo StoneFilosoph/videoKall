@@ -28,6 +28,9 @@ services:
       - EXTERNAL_IP=${EXTERNAL_IP}
       - TURN_SERVER_PUBLIC=${TURN_SERVER_PUBLIC}
       - TURN_TLS_ENABLED=${TURN_TLS_ENABLED}
+      - DB_PATH=/app/data/rooms.db
+    volumes:
+      - signaling-data:/app/data
     expose:
       - "3000"
     healthcheck:
@@ -61,4 +64,7 @@ services:
 networks:
   videokall:
     driver: bridge
+
+volumes:
+  signaling-data:
 
