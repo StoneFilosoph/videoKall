@@ -54,8 +54,15 @@ class VideoKall {
 			endedReason: document.getElementById('ended-reason'),
 			rejoinBtn: document.getElementById('rejoin-btn'),
 			backHomeBtn: document.getElementById('back-home-btn'),
-			errorMessage: document.getElementById('error-message')
+			errorMessage: document.getElementById('error-message'),
+			langToggle: document.getElementById('lang-toggle'),
+			langDropdown: document.getElementById('lang-dropdown'),
+			currentLang: document.getElementById('current-lang')
 		};
+		
+		// Initialize i18n
+		window.i18n.init();
+		this.updateLangDisplay();
 		
 		this.bindEvents();
 		this.checkJoinLink();
@@ -93,8 +100,43 @@ class VideoKall {
 		this.elements.rejoinBtn.addEventListener('click', () => this.rejoinCall());
 		this.elements.backHomeBtn.addEventListener('click', () => this.backToHome());
 		
+		// Language switcher
+		this.elements.langToggle.addEventListener('click', (e) => {
+			e.stopPropagation();
+			this.elements.langDropdown.classList.toggle('hidden');
+		});
+		
+		document.querySelectorAll('.lang-option').forEach(btn => {
+			btn.addEventListener('click', (e) => {
+				const lang = e.currentTarget.getAttribute('data-lang');
+				window.i18n.setLocale(lang);
+				this.updateLangDisplay();
+				this.elements.langDropdown.classList.add('hidden');
+				// Re-render rooms if on admin screen
+				if (this.screens.admin.classList.contains('active')) {
+					this.loadRooms();
+				}
+			});
+		});
+		
+		// Close language dropdown when clicking outside
+		document.addEventListener('click', () => {
+			this.elements.langDropdown.classList.add('hidden');
+		});
+		
 		// Make local video draggable
 		this.makeVideoDraggable();
+	}
+	
+	updateLangDisplay() {
+		const locale = window.i18n.getLocale();
+		this.elements.currentLang.textContent = locale.toUpperCase();
+		
+		// Update active state in dropdown
+		document.querySelectorAll('.lang-option').forEach(btn => {
+			const isActive = btn.getAttribute('data-lang') === locale;
+			btn.classList.toggle('active', isActive);
+		});
 	}
 	
 	showScreen(screenName) {
@@ -133,7 +175,7 @@ class VideoKall {
 	async directJoin(roomId) {
 		this.roomId = roomId;
 		this.showScreen('joining');
-		this.elements.joiningRoomName.textContent = 'Connecting...';
+		this.elements.joiningRoomName.textContent = window.i18n.t('call.connecting');
 		
 		try {
 			// Check if room exists
@@ -142,7 +184,7 @@ class VideoKall {
 			
 			if (!data.exists) {
 				this.showScreen('entry');
-				this.showError('Room not found. It may have been deleted.');
+				this.showError(window.i18n.t('error.roomNotFound'));
 				return;
 			}
 			
@@ -154,7 +196,7 @@ class VideoKall {
 		} catch (error) {
 			console.error('Failed to join:', error);
 			this.showScreen('entry');
-			this.showError('Failed to join room. Please try again.');
+			this.showError(window.i18n.t('error.joinFailed'));
 		}
 	}
 	
@@ -162,7 +204,7 @@ class VideoKall {
 	async adminLogin() {
 		const code = this.elements.adminCode.value.trim();
 		if (!code) {
-			this.showError('Please enter the special code');
+			this.showError(window.i18n.t('error.enterCode'));
 			return;
 		}
 		
@@ -173,7 +215,7 @@ class VideoKall {
 			});
 			
 			if (response.status === 401) {
-				this.showError('Invalid special code');
+				this.showError(window.i18n.t('error.invalidCode'));
 				return;
 			}
 			
@@ -181,7 +223,7 @@ class VideoKall {
 			this.showScreen('admin');
 			this.loadRooms();
 		} catch (error) {
-			this.showError('Failed to connect. Please try again.');
+			this.showError(window.i18n.t('error.connectionFailed'));
 		}
 	}
 	
@@ -203,7 +245,7 @@ class VideoKall {
 			this.renderRooms(data.rooms);
 		} catch (error) {
 			console.error('Failed to load rooms:', error);
-			this.elements.roomsList.innerHTML = '<div class="error-rooms">Failed to load rooms</div>';
+			this.elements.roomsList.innerHTML = `<div class="error-rooms">${window.i18n.t('admin.failedLoadRooms')}</div>`;
 		}
 	}
 	
@@ -215,6 +257,11 @@ class VideoKall {
 		}
 		
 		this.elements.noRooms.classList.add('hidden');
+		
+		const inCallText = window.i18n.t('admin.inCall');
+		const joinText = window.i18n.t('admin.joinButton');
+		const copyLinkTitle = window.i18n.t('admin.copyLink');
+		const deleteTitle = window.i18n.t('admin.deleteRoom');
 		
 		const html = rooms.map(room => `
 			<div class="room-card" data-room-id="${room.id}">
@@ -229,19 +276,19 @@ class VideoKall {
 								<path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
 								<path d="M16 3.13a4 4 0 0 1 0 7.75"/>
 							</svg>
-							${room.participantCount} in call
+							${room.participantCount} ${inCallText}
 						</span>
 					</div>
 				</div>
 				<div class="room-actions">
-					<button class="btn icon" onclick="videoKall.copyRoomLink('${room.id}')" title="Copy link">
+					<button class="btn icon" onclick="videoKall.copyRoomLink('${room.id}')" title="${copyLinkTitle}">
 						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
 							<path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
 							<path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
 						</svg>
 					</button>
-					<button class="btn secondary small" onclick="videoKall.joinRoomAsAdmin('${room.id}')">Join</button>
-					<button class="btn danger-outline small" onclick="videoKall.deleteRoom('${room.id}')" title="Delete room">
+					<button class="btn secondary small" onclick="videoKall.joinRoomAsAdmin('${room.id}')">${joinText}</button>
+					<button class="btn danger-outline small" onclick="videoKall.deleteRoom('${room.id}')" title="${deleteTitle}">
 						<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16">
 							<polyline points="3 6 5 6 21 6"/>
 							<path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>
@@ -261,7 +308,7 @@ class VideoKall {
 	}
 	
 	async createRoom() {
-		const name = this.elements.newRoomName.value.trim() || 'New Room';
+		const name = this.elements.newRoomName.value.trim() || window.i18n.t('admin.defaultRoomName');
 		
 		try {
 			const response = await fetch('/api/admin/rooms', {
@@ -279,12 +326,12 @@ class VideoKall {
 			this.loadRooms();
 		} catch (error) {
 			console.error('Failed to create room:', error);
-			this.showError('Failed to create room');
+			this.showError(window.i18n.t('admin.failedCreateRoom'));
 		}
 	}
 	
 	async deleteRoom(roomId) {
-		if (!confirm('Are you sure you want to delete this room? Anyone in the call will be disconnected.')) {
+		if (!confirm(window.i18n.t('admin.deleteConfirm'))) {
 			return;
 		}
 		
@@ -299,7 +346,7 @@ class VideoKall {
 			this.loadRooms();
 		} catch (error) {
 			console.error('Failed to delete room:', error);
-			this.showError('Failed to delete room');
+			this.showError(window.i18n.t('admin.failedDeleteRoom'));
 		}
 	}
 	
@@ -434,7 +481,7 @@ class VideoKall {
 			console.error('Failed to start call:', error);
 			this.cleanup();
 			this.showScreen('entry');
-			this.showError('Failed to start call. Please check camera/microphone permissions.');
+			this.showError(window.i18n.t('error.mediaFailed'));
 		}
 	}
 	
@@ -488,7 +535,7 @@ class VideoKall {
 	onBecameHost() {
 		this.isHost = true;
 		console.log('You are now the host');
-		this.updateConnectionStatus('You are now the host');
+		this.updateConnectionStatus(window.i18n.t('call.youAreHost'));
 		setTimeout(() => this.updateConnectionStatus('connected'), 3000);
 	}
 	
@@ -498,8 +545,8 @@ class VideoKall {
 	
 	onRoomDeleted() {
 		this.cleanup();
-		this.elements.endedTitle.textContent = 'Room Deleted';
-		this.elements.endedReason.textContent = 'The room has been deleted by the admin.';
+		this.elements.endedTitle.textContent = window.i18n.t('ended.roomDeleted');
+		this.elements.endedReason.textContent = window.i18n.t('ended.roomDeletedByAdmin');
 		this.elements.rejoinBtn.classList.add('hidden');
 		this.showScreen('ended');
 	}
@@ -740,13 +787,13 @@ class VideoKall {
 		const status = this.elements.connectionStatus;
 		
 		if (state === 'connected') {
-			status.textContent = 'Connected';
+			status.textContent = window.i18n.t('call.connected');
 			status.classList.add('connected');
 			setTimeout(() => {
 				status.classList.add('hidden');
 			}, 2000);
 		} else if (state === 'connecting') {
-			status.textContent = 'Connecting...';
+			status.textContent = window.i18n.t('call.connecting');
 			status.classList.remove('connected', 'hidden');
 		} else {
 			status.textContent = state;
@@ -839,8 +886,8 @@ class VideoKall {
 		}
 		
 		this.cleanup();
-		this.elements.endedTitle.textContent = 'Left Call';
-		this.elements.endedReason.textContent = 'You have left the call.';
+		this.elements.endedTitle.textContent = window.i18n.t('ended.leftCall');
+		this.elements.endedReason.textContent = window.i18n.t('ended.youLeft');
 		this.elements.rejoinBtn.classList.remove('hidden');
 		this.showScreen('ended');
 	}
@@ -902,7 +949,7 @@ class VideoKall {
 		this.elements.toggleVideoBtn.querySelector('.icon-video-on').classList.remove('hidden');
 		this.elements.toggleVideoBtn.querySelector('.icon-video-off').classList.add('hidden');
 		this.elements.connectionStatus.classList.remove('connected', 'hidden');
-		this.elements.connectionStatus.textContent = 'Connecting...';
+		this.elements.connectionStatus.textContent = window.i18n.t('call.connecting');
 	}
 	
 	makeVideoDraggable() {

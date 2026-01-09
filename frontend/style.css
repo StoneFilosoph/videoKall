@@ -21,6 +21,9 @@
 	--shadow-glow: 0 0 40px var(--color-primary-glow);
 	--font-family: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
 	--transition: 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+	
+	/* i18n CSS variables for pseudo-elements */
+	--i18n-waiting-text: "Waiting for others to join...";
 }
 
 * {
@@ -571,7 +574,7 @@ input:focus {
 }
 
 .videos-grid:empty::after {
-	content: 'Waiting for others to join...';
+	content: var(--i18n-waiting-text);
 	color: var(--color-text-muted);
 	font-size: 1.1rem;
 }
@@ -777,6 +780,92 @@ input:focus {
 	display: none !important;
 }
 
+/* Language Switcher */
+.language-switcher {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	z-index: 100;
+}
+
+.btn.lang-btn {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 16px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--color-border);
+	border-radius: 100px;
+	color: var(--color-text);
+	font-size: 0.85rem;
+	font-weight: 500;
+	cursor: pointer;
+	transition: var(--transition);
+}
+
+.btn.lang-btn:hover {
+	border-color: var(--color-primary);
+	background: var(--color-surface);
+}
+
+.btn.lang-btn svg {
+	color: var(--color-primary);
+}
+
+.lang-dropdown {
+	position: absolute;
+	top: calc(100% + 8px);
+	right: 0;
+	min-width: 160px;
+	background: var(--color-bg-card);
+	border: 1px solid var(--color-border);
+	border-radius: var(--radius-md);
+	padding: 8px;
+	box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+	animation: dropdownFadeIn 0.15s ease;
+}
+
+@keyframes dropdownFadeIn {
+	from {
+		opacity: 0;
+		transform: translateY(-8px);
+	}
+	to {
+		opacity: 1;
+		transform: translateY(0);
+	}
+}
+
+.lang-option {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	width: 100%;
+	padding: 12px 16px;
+	background: transparent;
+	border: none;
+	border-radius: var(--radius-sm);
+	color: var(--color-text);
+	font-family: var(--font-family);
+	font-size: 0.95rem;
+	cursor: pointer;
+	transition: var(--transition);
+}
+
+.lang-option:hover {
+	background: var(--color-surface);
+}
+
+.lang-option.active {
+	background: rgba(255, 107, 74, 0.15);
+	color: var(--color-primary);
+}
+
+.lang-flag {
+	font-size: 1.25rem;
+	line-height: 1;
+}
+
 /* Ended Screen */
 .ended-content {
 	text-align: center;
@@ -896,5 +985,20 @@ input:focus {
 		max-height: 100%;
 		width: auto;
 		height: auto;
+	}
+	
+	.language-switcher {
+		top: 12px;
+		right: 12px;
+	}
+	
+	.btn.lang-btn {
+		padding: 8px 12px;
+		font-size: 0.8rem;
+	}
+	
+	.btn.lang-btn svg {
+		width: 16px;
+		height: 16px;
 	}
 }
