@@ -102,12 +102,19 @@ class VideoKall {
 		
 		// Language switcher
 		this.elements.langToggle.addEventListener('click', (e) => {
+			e.preventDefault();
 			e.stopPropagation();
 			this.elements.langDropdown.classList.toggle('hidden');
 		});
 		
+		// Prevent dropdown from closing when clicking inside it
+		this.elements.langDropdown.addEventListener('click', (e) => {
+			e.stopPropagation();
+		});
+		
 		document.querySelectorAll('.lang-option').forEach(btn => {
 			btn.addEventListener('click', (e) => {
+				e.stopPropagation();
 				const lang = e.currentTarget.getAttribute('data-lang');
 				window.i18n.setLocale(lang);
 				this.updateLangDisplay();
@@ -120,8 +127,11 @@ class VideoKall {
 		});
 		
 		// Close language dropdown when clicking outside
-		document.addEventListener('click', () => {
-			this.elements.langDropdown.classList.add('hidden');
+		document.addEventListener('click', (e) => {
+			const switcher = document.querySelector('.language-switcher');
+			if (switcher && !switcher.contains(e.target)) {
+				this.elements.langDropdown.classList.add('hidden');
+			}
 		});
 		
 		// Make local video draggable
