@@ -14,6 +14,12 @@ class VideoKall {
 		this.facingMode = 'user';
 		this.adminCode = null;
 		
+		// Camera devices
+		this.availableCameras = [];
+		this.currentCameraId = null;
+		this.frontCameraId = null;
+		this.backCameraId = null;
+		
 		// Peer connections for each participant (mesh topology)
 		// Map<participantId, { pc: RTCPeerConnection, stream: MediaStream }>
 		this.peers = new Map();
@@ -46,6 +52,7 @@ class VideoKall {
 			videosGrid: document.getElementById('videos-grid'),
 			localVideo: document.getElementById('local-video'),
 			connectionStatus: document.getElementById('connection-status'),
+			cameraDebugInfo: document.getElementById('camera-debug-info'),
 			toggleAudioBtn: document.getElementById('toggle-audio-btn'),
 			toggleVideoBtn: document.getElementById('toggle-video-btn'),
 			switchCameraBtn: document.getElementById('switch-camera-btn'),
@@ -477,6 +484,22 @@ class VideoKall {
 	
 	async startCall() {
 		try {
+			// Ensure debug element exists
+			if (!this.elements.cameraDebugInfo) {
+				this.elements.cameraDebugInfo = document.getElementById('camera-debug-info');
+			}
+			// Create debug element if it doesn't exist in DOM
+			if (!this.elements.cameraDebugInfo) {
+				const debugDiv = document.createElement('div');
+				debugDiv.id = 'camera-debug-info';
+				debugDiv.className = 'camera-debug-info';
+				document.body.appendChild(debugDiv);
+				this.elements.cameraDebugInfo = debugDiv;
+			}
+			
+			// Show initial debug message
+			this.elements.cameraDebugInfo.textContent = 'CAMERA DEBUG\nInitializing cameras...';
+			
 			await this.setupMedia();
 			this.showScreen('call');
 			
@@ -495,19 +518,246 @@ class VideoKall {
 		}
 	}
 	
+	async enumerateCameras() {
+		try {
+			// Update debug display
+			if (this.elements.cameraDebugInfo) {
+				this.elements.cameraDebugInfo.textContent = 'CAMERA DEBUG\nRequesting camera permission...';
+			}
+			
+			// First request permission if needed
+			const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+			tempStream.getTracks().forEach(track => track.stop());
+			
+			if (this.elements.cameraDebugInfo) {
+				this.elements.cameraDebugInfo.textContent = 'CAMERA DEBUG\nEnumerating devices...';
+			}
+			
+			const devices = await navigator.mediaDevices.enumerateDevices();
+			const videoDevices = devices.filter(device => device.kind === 'videoinput');
+			
+			// Extract camera number from label (e.g., "camera 0, facing back" -> 0)
+			const getCameraNumber = (label) => {
+				const match = label.match(/camera\s*(\d+)/i);
+				return match ? parseInt(match[1], 10) : 999; // 999 = unknown, will be sorted last
+			};
+			
+			// Store cameras with their original index and parsed camera number
+			this.availableCameras = videoDevices.map((device, index) => ({
+				...device,
+				deviceId: device.deviceId,
+				label: device.label,
+				originalIndex: index,
+				cameraNumber: getCameraNumber(device.label)
+			}));
+			
+			// Helper to check if camera is front-facing
+			const isFrontCamera = (label) => {
+				const labelLower = label.toLowerCase();
+				return labelLower.includes('front') || labelLower.includes('user') || labelLower.includes('selfie');
+			};
+			
+			// Helper to check if camera is back-facing
+			const isBackCamera = (label) => {
+				const labelLower = label.toLowerCase();
+				return labelLower.includes('back') || labelLower.includes('environment') || labelLower.includes('rear');
+			};
+			
+			// Filter out ultrawide, telephoto, macro cameras (we want 1x primary camera)
+			const isPrimaryCamera = (label) => {
+				const labelLower = label.toLowerCase();
+				// Exclude ultrawide, telephoto, macro, depth cameras
+				return !labelLower.includes('ultrawide') && 
+				       !labelLower.includes('wide') &&
+				       !labelLower.includes('telephoto') && 
+				       !labelLower.includes('macro') && 
+				       !labelLower.includes('depth') &&
+				       !labelLower.includes('tof') &&
+				       !labelLower.includes('2x') &&
+				       !labelLower.includes('3x') &&
+				       !labelLower.includes('5x') &&
+				       !labelLower.includes('10x') &&
+				       !labelLower.includes('0.5x') &&
+				       !labelLower.includes('0.6x');
+			};
+			
+			// Find front cameras, sorted by camera number in label (camera 0 preferred over camera 1)
+			const frontCameras = this.availableCameras
+				.filter(cam => isFrontCamera(cam.label))
+				.sort((a, b) => a.cameraNumber - b.cameraNumber);
+			
+			// Find back cameras, sorted by camera number in label (camera 0 preferred over camera 3)
+			const backCameras = this.availableCameras
+				.filter(cam => isBackCamera(cam.label))
+				.sort((a, b) => a.cameraNumber - b.cameraNumber);
+			
+			// Select front camera: prefer primary (1x) with lowest camera number
+			const primaryFrontCameras = frontCameras.filter(cam => isPrimaryCamera(cam.label));
+			if (primaryFrontCameras.length > 0) {
+				// Pick the one with lowest camera number
+				this.frontCameraId = primaryFrontCameras[0].deviceId;
+			} else if (frontCameras.length > 0) {
+				// Fallback: pick first front camera (lowest camera number)
+				this.frontCameraId = frontCameras[0].deviceId;
+			} else {
+				this.frontCameraId = null;
+			}
+			
+			// Select back camera: prefer primary (1x) with lowest camera number
+			const primaryBackCameras = backCameras.filter(cam => isPrimaryCamera(cam.label));
+			if (primaryBackCameras.length > 0) {
+				// Pick the one with lowest camera number
+				this.backCameraId = primaryBackCameras[0].deviceId;
+			} else if (backCameras.length > 0) {
+				// Fallback: pick first back camera (lowest camera number)
+				this.backCameraId = backCameras[0].deviceId;
+			} else {
+				this.backCameraId = null;
+			}
+			
+			// If we can't identify by label, try to determine by facingMode constraint
+			if (!this.frontCameraId && !this.backCameraId && videoDevices.length > 0) {
+				try {
+					const frontTest = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
+					const frontTrack = frontTest.getVideoTracks()[0];
+					if (frontTrack) {
+						const settings = frontTrack.getSettings();
+						if (settings.deviceId) {
+							this.frontCameraId = settings.deviceId;
+						}
+						frontTrack.stop();
+					}
+				} catch (e) {
+					console.log('Could not test front camera');
+				}
+				
+				try {
+					const backTest = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+					const backTrack = backTest.getVideoTracks()[0];
+					if (backTrack) {
+						const settings = backTrack.getSettings();
+						if (settings.deviceId) {
+							this.backCameraId = settings.deviceId;
+						}
+						backTrack.stop();
+					}
+				} catch (e) {
+					console.log('Could not test back camera');
+				}
+			}
+			
+			// Set default camera based on facingMode
+			if (this.facingMode === 'user' && this.frontCameraId) {
+				this.currentCameraId = this.frontCameraId;
+			} else if (this.facingMode === 'environment' && this.backCameraId) {
+				this.currentCameraId = this.backCameraId;
+			} else {
+				// Fallback to first available camera
+				this.currentCameraId = videoDevices.length > 0 ? videoDevices[0].deviceId : null;
+			}
+			
+			console.log('Available cameras:', videoDevices.map(d => ({ id: d.deviceId, label: d.label })));
+			console.log('Selected front camera (1x):', this.frontCameraId);
+			console.log('Selected back camera (1x):', this.backCameraId);
+			console.log('Current camera:', this.currentCameraId);
+			
+			// Update debug display
+			this.updateCameraDebugInfo();
+			
+		} catch (error) {
+			console.error('Failed to enumerate cameras:', error);
+			// Fallback: cameras will be enumerated on first getUserMedia call
+			this.updateCameraDebugInfo('Error: ' + error.message);
+		}
+	}
+	
+	updateCameraDebugInfo(errorMessage = null) {
+		const debugEl = this.elements.cameraDebugInfo;
+		if (!debugEl) return;
+		
+		if (errorMessage) {
+			debugEl.textContent = `CAMERA DEBUG\nError: ${errorMessage}`;
+			return;
+		}
+		
+		let debugText = 'CAMERA DEBUG\n';
+		debugText += `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+		debugText += `Total cameras: ${this.availableCameras.length}\n\n`;
+		
+		if (this.availableCameras.length > 0) {
+			debugText += `All cameras:\n`;
+			debugText += `(idx=enum order, cam#=label number)\n`;
+			this.availableCameras.forEach((cam) => {
+				const idx = cam.originalIndex !== undefined ? cam.originalIndex : '?';
+				const camNum = cam.cameraNumber !== undefined ? cam.cameraNumber : '?';
+				const isFront = cam.deviceId === this.frontCameraId;
+				const isBack = cam.deviceId === this.backCameraId;
+				const isCurrent = cam.deviceId === this.currentCameraId;
+				let markers = '';
+				if (isFront) markers += ' ★FRONT';
+				if (isBack) markers += ' ★BACK';
+				if (isCurrent) markers += ' ◄NOW';
+				
+				debugText += `idx${idx} cam#${camNum}: ${cam.label || 'Unlabeled'}${markers}\n`;
+			});
+			debugText += '\n';
+		} else {
+			debugText += `No cameras detected\n\n`;
+		}
+		
+		// Find selected cameras info
+		const frontCam = this.availableCameras.find(c => c.deviceId === this.frontCameraId);
+		const backCam = this.availableCameras.find(c => c.deviceId === this.backCameraId);
+		const currentCam = this.availableCameras.find(c => c.deviceId === this.currentCameraId);
+		
+		debugText += `SELECTED (by cam#):\n`;
+		debugText += `Front: ${frontCam ? `cam#${frontCam.cameraNumber} ${frontCam.label}` : 'NONE'}\n`;
+		debugText += `Back: ${backCam ? `cam#${backCam.cameraNumber} ${backCam.label}` : 'NONE'}\n`;
+		debugText += `Active: ${currentCam ? `cam#${currentCam.cameraNumber} ${currentCam.label}` : 'NONE'}\n`;
+		debugText += `Mode: ${this.facingMode}\n`;
+		
+		debugEl.textContent = debugText;
+	}
+	
 	async setupMedia() {
 		try {
+			// Enumerate cameras first if not already done
+			if (this.availableCameras.length === 0) {
+				await this.enumerateCameras();
+			}
+			
+			// Build video constraints - prefer deviceId if available, fallback to facingMode
+			const videoConstraints = {
+				width: { ideal: 1280 },
+				height: { ideal: 720 }
+			};
+			
+			if (this.currentCameraId) {
+				videoConstraints.deviceId = { exact: this.currentCameraId };
+			} else {
+				// Fallback to facingMode if deviceId not available
+				videoConstraints.facingMode = this.facingMode;
+			}
+			
 			this.localStream = await navigator.mediaDevices.getUserMedia({
-				video: {
-					width: { ideal: 1280 },
-					height: { ideal: 720 },
-					facingMode: this.facingMode
-				},
+				video: videoConstraints,
 				audio: {
 					echoCancellation: true,
 					noiseSuppression: true
 				}
 			});
+			
+			// Update currentCameraId from actual stream
+			const videoTrack = this.localStream.getVideoTracks()[0];
+			if (videoTrack) {
+				const settings = videoTrack.getSettings();
+				if (settings.deviceId) {
+					this.currentCameraId = settings.deviceId;
+				}
+			}
+			
+			// Update debug display with actual camera used
+			this.updateCameraDebugInfo();
 			
 			this.elements.localVideo.srcObject = this.localStream;
 		} catch (error) {
@@ -848,25 +1098,71 @@ class VideoKall {
 	}
 	
 	async switchCamera() {
-		this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+		// Toggle between front and back camera
+		let targetCameraId = null;
+		
+		if (this.currentCameraId === this.frontCameraId) {
+			// Currently using front camera, switch to back
+			this.facingMode = 'environment';
+			targetCameraId = this.backCameraId;
+		} else if (this.currentCameraId === this.backCameraId) {
+			// Currently using back camera, switch to front
+			this.facingMode = 'user';
+			targetCameraId = this.frontCameraId;
+		} else {
+			// Unknown camera, try to toggle based on facingMode
+			this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+			targetCameraId = this.facingMode === 'user' ? this.frontCameraId : this.backCameraId;
+		}
+		
+		// If no deviceId available, fallback to facingMode
+		if (!targetCameraId) {
+			// Refresh camera enumeration if needed
+			if (this.availableCameras.length === 0) {
+				await this.enumerateCameras();
+				targetCameraId = this.facingMode === 'user' ? this.frontCameraId : this.backCameraId;
+			}
+		}
 		
 		try {
-			if (this.localStream) {
-				this.localStream.getVideoTracks().forEach(track => track.stop());
+			if (!this.localStream) {
+				console.error('Cannot switch camera: no active stream');
+				return;
+			}
+			
+			// Stop old video track
+			const oldVideoTrack = this.localStream.getVideoTracks()[0];
+			if (oldVideoTrack) {
+				oldVideoTrack.stop();
+			}
+			
+			// Build video constraints
+			const videoConstraints = {
+				width: { ideal: 1280 },
+				height: { ideal: 720 }
+			};
+			
+			if (targetCameraId) {
+				videoConstraints.deviceId = { exact: targetCameraId };
+			} else {
+				// Fallback to facingMode
+				videoConstraints.facingMode = this.facingMode;
 			}
 			
 			const newStream = await navigator.mediaDevices.getUserMedia({
-				video: {
-					width: { ideal: 1280 },
-					height: { ideal: 720 },
-					facingMode: this.facingMode
-				},
+				video: videoConstraints,
 				audio: false
 			});
 			
 			const newVideoTrack = newStream.getVideoTracks()[0];
 			
-			const oldVideoTrack = this.localStream.getVideoTracks()[0];
+			// Update currentCameraId from actual track
+			const settings = newVideoTrack.getSettings();
+			if (settings.deviceId) {
+				this.currentCameraId = settings.deviceId;
+			}
+			
+			// Replace the old track in the existing stream
 			if (oldVideoTrack) {
 				this.localStream.removeTrack(oldVideoTrack);
 			}
@@ -883,9 +1179,17 @@ class VideoKall {
 			}
 			
 			newVideoTrack.enabled = this.isVideoEnabled;
+			
+			// Update debug display
+			this.updateCameraDebugInfo();
+			
+			console.log('Switched to camera:', this.currentCameraId, 'facingMode:', this.facingMode);
 		} catch (error) {
 			console.error('Failed to switch camera:', error);
+			// Revert facingMode
 			this.facingMode = this.facingMode === 'user' ? 'environment' : 'user';
+			// Update debug display with error
+			this.updateCameraDebugInfo('Switch failed: ' + error.message);
 		}
 	}
 	
@@ -950,6 +1254,9 @@ class VideoKall {
 		this.isAudioEnabled = true;
 		this.isVideoEnabled = true;
 		this.facingMode = 'user';
+		this.currentCameraId = null;
+		// Note: We keep availableCameras, frontCameraId, and backCameraId
+		// as they don't need to be reset between calls
 		
 		// Reset UI
 		this.elements.toggleAudioBtn.classList.remove('muted');
@@ -960,6 +1267,11 @@ class VideoKall {
 		this.elements.toggleVideoBtn.querySelector('.icon-video-off').classList.add('hidden');
 		this.elements.connectionStatus.classList.remove('connected', 'hidden');
 		this.elements.connectionStatus.textContent = window.i18n.t('call.connecting');
+		
+		// Clear camera debug info
+		if (this.elements.cameraDebugInfo) {
+			this.elements.cameraDebugInfo.textContent = '';
+		}
 	}
 	
 	makeVideoDraggable() {

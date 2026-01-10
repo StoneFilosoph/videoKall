@@ -696,6 +696,31 @@ input:focus {
 	display: none;
 }
 
+/* Camera debug overlay - hidden in production, enable for debugging */
+.camera-debug-info {
+	display: none !important;
+	/* To enable debugging, comment out the line above and uncomment below:
+	position: fixed;
+	top: 80px;
+	left: 16px;
+	background: rgba(0, 0, 0, 0.9);
+	border: 3px solid #ff0;
+	padding: 16px;
+	border-radius: 8px;
+	font-size: 12px;
+	color: #0f0;
+	font-family: 'Courier New', monospace;
+	line-height: 1.5;
+	max-width: 90vw;
+	max-height: 60vh;
+	overflow-y: auto;
+	z-index: 99999;
+	box-shadow: 0 4px 20px rgba(0, 0, 0, 0.8);
+	white-space: pre-wrap;
+	word-break: break-all;
+	*/
+}
+
 @keyframes blink {
 	0%, 100% { opacity: 1; }
 	50% { opacity: 0.4; }
