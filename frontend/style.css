@@ -647,7 +647,7 @@ input:focus {
 
 #local-video {
 	position: absolute;
-	bottom: 120px;
+	bottom: 108px;
 	right: 24px;
 	width: 180px;
 	max-height: 240px;
@@ -958,8 +958,8 @@ input:focus {
 	#local-video {
 		width: 100px;
 		max-height: 180px;
-		bottom: 110px;
-		right: 16px;
+		bottom: 100px;
+		right: 12px;
 	}
 	
 	.btn.control {

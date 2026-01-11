@@ -1297,12 +1297,24 @@ class VideoKall {
 			const newLeft = startLeft + deltaX;
 			const newBottom = startBottom - deltaY;
 			
-			const maxLeft = window.innerWidth - video.offsetWidth - 24;
-			const maxBottom = window.innerHeight - video.offsetHeight - 120;
+			// Responsive margins for edge padding
+			const isMobile = window.innerWidth <= 600;
+			const edgePadding = isMobile ? 12 : 24;
 			
-			video.style.left = Math.max(24, Math.min(maxLeft, newLeft)) + 'px';
+			// Top margin: small buffer to avoid edge
+			const topMargin = isMobile ? 12 : 16;
+			
+			// Bottom margin: just enough to clear the call controls
+			// Controls are ~112px on desktop (64px buttons + 24px*2 padding)
+			// Controls are ~104px on mobile (56px buttons + 24px*2 padding)
+			const bottomMargin = isMobile ? 100 : 108;
+			
+			const maxLeft = window.innerWidth - video.offsetWidth - edgePadding;
+			const maxBottom = window.innerHeight - video.offsetHeight - topMargin;
+			
+			video.style.left = Math.max(edgePadding, Math.min(maxLeft, newLeft)) + 'px';
 			video.style.right = 'auto';
-			video.style.bottom = Math.max(120, Math.min(maxBottom, newBottom)) + 'px';
+			video.style.bottom = Math.max(bottomMargin, Math.min(maxBottom, newBottom)) + 'px';
 		};
 		
 		const onDragEnd = () => {
