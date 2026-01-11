@@ -891,6 +891,60 @@ input:focus {
 	line-height: 1;
 }
 
+/* Picture-in-Picture Top Button (replaces language switcher during call) */
+.pip-top-btn {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	z-index: 100;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 44px;
+	height: 44px;
+	padding: 0;
+	background: var(--color-bg-card);
+	border: 1px solid var(--color-border);
+	border-radius: 50%;
+	color: var(--color-text);
+	cursor: pointer;
+	transition: var(--transition);
+}
+
+.pip-top-btn:hover {
+	border-color: var(--color-primary);
+	background: var(--color-surface);
+	color: var(--color-primary);
+}
+
+.pip-top-btn svg {
+	color: inherit;
+}
+
+.pip-top-btn.active {
+	background: rgba(74, 222, 128, 0.2);
+	border-color: var(--color-success);
+	color: var(--color-success);
+}
+
+.pip-top-btn.active:hover {
+	background: rgba(74, 222, 128, 0.3);
+}
+
+@media (max-width: 600px) {
+	.pip-top-btn {
+		top: 12px;
+		right: 12px;
+		width: 40px;
+		height: 40px;
+	}
+	
+	.pip-top-btn svg {
+		width: 16px;
+		height: 16px;
+	}
+}
+
 /* Ended Screen */
 .ended-content {
 	text-align: center;

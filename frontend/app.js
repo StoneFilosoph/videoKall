@@ -27,6 +27,12 @@ class VideoKall {
 		// Queue for ICE candidates that arrive before remote description is set
 		this.pendingIceCandidates = new Map(); // participantId -> [candidates]
 		
+		// Picture-in-Picture and background handling
+		this.pipVideoElement = null;
+		this.isPipActive = false;
+		this.wakeLock = null;
+		this.autoPipEnabled = true; // Auto-enter PiP when switching apps
+		
 		this.init();
 	}
 	
@@ -56,6 +62,7 @@ class VideoKall {
 			toggleAudioBtn: document.getElementById('toggle-audio-btn'),
 			toggleVideoBtn: document.getElementById('toggle-video-btn'),
 			switchCameraBtn: document.getElementById('switch-camera-btn'),
+			pipTopBtn: document.getElementById('pip-top-btn'),
 			leaveCallBtn: document.getElementById('leave-call-btn'),
 			endedTitle: document.getElementById('ended-title'),
 			endedReason: document.getElementById('ended-reason'),
@@ -64,6 +71,7 @@ class VideoKall {
 			errorMessage: document.getElementById('error-message'),
 			langToggle: document.getElementById('lang-toggle'),
 			langDropdown: document.getElementById('lang-dropdown'),
+			langSwitcher: document.querySelector('.language-switcher'),
 			currentLang: document.getElementById('current-lang')
 		};
 		
@@ -96,12 +104,27 @@ class VideoKall {
 		this.elements.toggleAudioBtn.addEventListener('click', () => this.toggleAudio());
 		this.elements.toggleVideoBtn.addEventListener('click', () => this.toggleVideo());
 		this.elements.switchCameraBtn.addEventListener('click', () => this.switchCamera());
+		this.elements.pipTopBtn.addEventListener('click', () => this.togglePictureInPicture());
 		this.elements.leaveCallBtn.addEventListener('click', () => this.leaveCall());
 		
 		// Show switch camera button only on mobile
 		if (this.isMobileDevice()) {
 			this.elements.switchCameraBtn.classList.remove('hidden');
 		}
+		
+		// Handle visibility change for auto-PiP and background handling
+		document.addEventListener('visibilitychange', () => this.handleVisibilityChange());
+		
+		// Handle PiP events
+		document.addEventListener('enterpictureinpicture', () => {
+			this.isPipActive = true;
+			this.elements.pipTopBtn.classList.add('active');
+		});
+		
+		document.addEventListener('leavepictureinpicture', () => {
+			this.isPipActive = false;
+			this.elements.pipTopBtn.classList.remove('active');
+		});
 		
 		// Ended screen
 		this.elements.rejoinBtn.addEventListener('click', () => this.rejoinCall());
@@ -502,6 +525,15 @@ class VideoKall {
 			
 			await this.setupMedia();
 			this.showScreen('call');
+			
+			// Hide language switcher and show PiP button during call
+			this.elements.langSwitcher.classList.add('hidden');
+			if (this.isPipSupported()) {
+				this.elements.pipTopBtn.classList.remove('hidden');
+			}
+			
+			// Request wake lock to prevent device from sleeping
+			await this.requestWakeLock();
 			
 			await this.connectWebSocket();
 			
@@ -1097,6 +1129,245 @@ class VideoKall {
 			(navigator.maxTouchPoints && navigator.maxTouchPoints > 2);
 	}
 	
+	// Picture-in-Picture support check
+	isPipSupported() {
+		return 'pictureInPictureEnabled' in document && document.pictureInPictureEnabled;
+	}
+	
+	// Get the best video element for PiP (prefer remote video, fallback to local)
+	getPipVideoElement() {
+		// First try to use a remote video with an active stream
+		for (const [, peer] of this.peers) {
+			if (peer.videoEl && peer.stream && peer.stream.active) {
+				return peer.videoEl;
+			}
+		}
+		// Fallback to local video
+		return this.elements.localVideo;
+	}
+	
+	// Toggle Picture-in-Picture mode
+	async togglePictureInPicture() {
+		if (!this.isPipSupported()) {
+			console.log('Picture-in-Picture not supported');
+			return;
+		}
+		
+		try {
+			if (document.pictureInPictureElement) {
+				// Exit PiP
+				await document.exitPictureInPicture();
+				this.isPipActive = false;
+				this.pipVideoElement = null;
+			} else {
+				// Enter PiP with best available video
+				const videoEl = this.getPipVideoElement();
+				if (videoEl && videoEl.srcObject) {
+					await videoEl.requestPictureInPicture();
+					this.isPipActive = true;
+					this.pipVideoElement = videoEl;
+				}
+			}
+		} catch (error) {
+			console.error('PiP toggle failed:', error);
+		}
+	}
+	
+	// Handle visibility change (user switching apps)
+	async handleVisibilityChange() {
+		if (!this.localStream) return; // Not in a call
+		
+		if (document.hidden) {
+			// Page is now hidden (user switched away)
+			console.log('Page hidden - attempting to maintain call');
+			
+			// Auto-enter PiP if enabled and supported
+			if (this.autoPipEnabled && this.isPipSupported() && !document.pictureInPictureElement) {
+				try {
+					const videoEl = this.getPipVideoElement();
+					if (videoEl && videoEl.srcObject && videoEl.readyState >= 2) {
+						await videoEl.requestPictureInPicture();
+						this.isPipActive = true;
+						this.pipVideoElement = videoEl;
+						console.log('Auto-entered PiP mode');
+					}
+				} catch (error) {
+					// PiP failed - this is expected on some mobile browsers
+					console.log('Auto-PiP not available:', error.message);
+				}
+			}
+			
+			// Try to keep audio alive with a keep-alive audio context
+			this.startAudioKeepAlive();
+			
+		} else {
+			// Page is now visible (user returned)
+			console.log('Page visible - restoring call');
+			
+			// Stop audio keep-alive
+			this.stopAudioKeepAlive();
+			
+			// Check if streams are still active
+			await this.checkAndRestoreStreams();
+		}
+	}
+	
+	// Audio keep-alive to prevent suspension on some mobile browsers
+	startAudioKeepAlive() {
+		if (this.audioKeepAlive) return;
+		
+		try {
+			// Create a silent audio context to keep the audio system active
+			this.audioKeepAlive = new (window.AudioContext || window.webkitAudioContext)();
+			
+			// Create a silent oscillator
+			const oscillator = this.audioKeepAlive.createOscillator();
+			const gain = this.audioKeepAlive.createGain();
+			gain.gain.value = 0.001; // Nearly silent
+			oscillator.connect(gain);
+			gain.connect(this.audioKeepAlive.destination);
+			oscillator.start();
+			
+			// Store reference to stop later
+			this.audioKeepAliveOscillator = oscillator;
+			
+			console.log('Audio keep-alive started');
+		} catch (error) {
+			console.log('Audio keep-alive not available:', error.message);
+		}
+	}
+	
+	stopAudioKeepAlive() {
+		if (this.audioKeepAliveOscillator) {
+			try {
+				this.audioKeepAliveOscillator.stop();
+			} catch (e) {}
+			this.audioKeepAliveOscillator = null;
+		}
+		if (this.audioKeepAlive) {
+			try {
+				this.audioKeepAlive.close();
+			} catch (e) {}
+			this.audioKeepAlive = null;
+		}
+	}
+	
+	// Check and restore streams after returning from background
+	async checkAndRestoreStreams() {
+		// Check if local stream is still active
+		if (this.localStream) {
+			const videoTrack = this.localStream.getVideoTracks()[0];
+			const audioTrack = this.localStream.getAudioTracks()[0];
+			
+			// Check if tracks are ended (happens on some mobile browsers after background)
+			const videoEnded = !videoTrack || videoTrack.readyState === 'ended';
+			const audioEnded = !audioTrack || audioTrack.readyState === 'ended';
+			
+			if (videoEnded || audioEnded) {
+				console.log('Streams were interrupted, attempting to restore...');
+				try {
+					await this.restoreMedia();
+				} catch (error) {
+					console.error('Failed to restore media:', error);
+					this.showError(window.i18n.t('error.mediaRestoreFailed') || 'Could not restore camera/microphone');
+				}
+			}
+		}
+		
+		// Ensure video elements are playing
+		this.elements.localVideo.play().catch(() => {});
+		for (const [, peer] of this.peers) {
+			if (peer.videoEl) {
+				peer.videoEl.play().catch(() => {});
+			}
+		}
+	}
+	
+	// Restore media after it was interrupted by background suspension
+	async restoreMedia() {
+		// Stop old tracks
+		if (this.localStream) {
+			this.localStream.getTracks().forEach(track => track.stop());
+		}
+		
+		// Get new media
+		const videoConstraints = {
+			width: { ideal: 1280 },
+			height: { ideal: 720 }
+		};
+		
+		if (this.currentCameraId) {
+			videoConstraints.deviceId = { exact: this.currentCameraId };
+		} else {
+			videoConstraints.facingMode = this.facingMode;
+		}
+		
+		this.localStream = await navigator.mediaDevices.getUserMedia({
+			video: videoConstraints,
+			audio: {
+				echoCancellation: true,
+				noiseSuppression: true
+			}
+		});
+		
+		// Apply mute states
+		this.localStream.getAudioTracks().forEach(track => {
+			track.enabled = this.isAudioEnabled;
+		});
+		this.localStream.getVideoTracks().forEach(track => {
+			track.enabled = this.isVideoEnabled;
+		});
+		
+		// Update local video
+		this.elements.localVideo.srcObject = this.localStream;
+		
+		// Replace tracks in all peer connections
+		const newVideoTrack = this.localStream.getVideoTracks()[0];
+		const newAudioTrack = this.localStream.getAudioTracks()[0];
+		
+		for (const [, peer] of this.peers) {
+			const senders = peer.pc.getSenders();
+			
+			for (const sender of senders) {
+				if (sender.track?.kind === 'video' && newVideoTrack) {
+					await sender.replaceTrack(newVideoTrack);
+				} else if (sender.track?.kind === 'audio' && newAudioTrack) {
+					await sender.replaceTrack(newAudioTrack);
+				}
+			}
+		}
+		
+		console.log('Media streams restored successfully');
+	}
+	
+	// Request Wake Lock to prevent device from sleeping during call
+	async requestWakeLock() {
+		if ('wakeLock' in navigator) {
+			try {
+				this.wakeLock = await navigator.wakeLock.request('screen');
+				console.log('Wake lock acquired');
+				
+				// Re-acquire wake lock if released (e.g., when tab becomes inactive)
+				this.wakeLock.addEventListener('release', () => {
+					console.log('Wake lock released');
+					// Try to re-acquire if still in a call
+					if (this.localStream && !document.hidden) {
+						this.requestWakeLock();
+					}
+				});
+			} catch (error) {
+				console.log('Wake lock not available:', error.message);
+			}
+		}
+	}
+	
+	releaseWakeLock() {
+		if (this.wakeLock) {
+			this.wakeLock.release().catch(() => {});
+			this.wakeLock = null;
+		}
+	}
+	
 	async switchCamera() {
 		// Toggle between front and back camera
 		let targetCameraId = null;
@@ -1225,6 +1496,19 @@ class VideoKall {
 	}
 	
 	cleanup() {
+		// Exit Picture-in-Picture if active
+		if (document.pictureInPictureElement) {
+			document.exitPictureInPicture().catch(() => {});
+		}
+		this.isPipActive = false;
+		this.pipVideoElement = null;
+		
+		// Release wake lock
+		this.releaseWakeLock();
+		
+		// Stop audio keep-alive
+		this.stopAudioKeepAlive();
+		
 		// Stop local media
 		if (this.localStream) {
 			this.localStream.getTracks().forEach(track => track.stop());
@@ -1265,6 +1549,9 @@ class VideoKall {
 		this.elements.toggleVideoBtn.classList.remove('muted');
 		this.elements.toggleVideoBtn.querySelector('.icon-video-on').classList.remove('hidden');
 		this.elements.toggleVideoBtn.querySelector('.icon-video-off').classList.add('hidden');
+		this.elements.pipTopBtn.classList.remove('active');
+		this.elements.pipTopBtn.classList.add('hidden');
+		this.elements.langSwitcher.classList.remove('hidden');
 		this.elements.connectionStatus.classList.remove('connected', 'hidden');
 		this.elements.connectionStatus.textContent = window.i18n.t('call.connecting');
 		

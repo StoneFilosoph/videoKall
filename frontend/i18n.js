@@ -44,6 +44,7 @@ const translations = {
 		'call.toggleMic': 'Toggle microphone',
 		'call.toggleCamera': 'Toggle camera',
 		'call.switchCamera': 'Switch camera',
+		'call.pip': 'Picture in Picture (keeps video when switching apps)',
 		'call.leaveCall': 'Leave call',
 		'call.youAreHost': 'You are now the host',
 		
@@ -62,6 +63,7 @@ const translations = {
 		'error.roomNotFound': 'Room not found. It may have been deleted.',
 		'error.joinFailed': 'Failed to join room. Please try again.',
 		'error.mediaFailed': 'Failed to start call. Please check camera/microphone permissions.',
+		'error.mediaRestoreFailed': 'Could not restore camera/microphone. Please rejoin the call.',
 		
 		// Language
 		'lang.language': 'Language',
@@ -112,6 +114,7 @@ const translations = {
 		'call.toggleMic': 'Включить/выключить микрофон',
 		'call.toggleCamera': 'Включить/выключить камеру',
 		'call.switchCamera': 'Переключить камеру',
+		'call.pip': 'Картинка в картинке (сохраняет видео при переключении приложений)',
 		'call.leaveCall': 'Покинуть звонок',
 		'call.youAreHost': 'Теперь вы организатор',
 		
@@ -130,6 +133,7 @@ const translations = {
 		'error.roomNotFound': 'Комната не найдена. Возможно, она была удалена.',
 		'error.joinFailed': 'Не удалось войти в комнату. Попробуйте снова.',
 		'error.mediaFailed': 'Не удалось начать звонок. Проверьте разрешения камеры и микрофона.',
+		'error.mediaRestoreFailed': 'Не удалось восстановить камеру/микрофон. Пожалуйста, перезайдите в звонок.',
 		
 		// Language
 		'lang.language': 'Язык',
