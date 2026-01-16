@@ -273,9 +273,14 @@ VideoKall/
 ├── setup-letsencrypt.ps1        # Windows Let's Encrypt setup
 ├── setup-letsencrypt.sh         # Linux/Mac Let's Encrypt setup
 ├── frontend/
+│   ├── modules/                 # Modular services
+│   │   ├── AdminService.js      # Admin API interaction
+│   │   ├── SignalingService.js  # WebSocket management
+│   │   ├── WebRTCService.js     # Camera/Peer connection logic
+│   │   └── UIService.js         # DOM & Interface management
 │   ├── index.html               # Main UI
 │   ├── style.css                # Styling
-│   └── app.js                   # WebRTC client logic
+│   └── app.js                   # Main controller
 ├── signaling/
 │   ├── server.js                # WebSocket signaling server
 │   ├── db.js                    # SQLite database module
