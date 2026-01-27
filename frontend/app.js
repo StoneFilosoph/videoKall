@@ -221,7 +221,7 @@ class VideoKall {
 
 	checkJoinLink() {
 		const urlParams = new URLSearchParams(window.location.search);
-		constjoinRoomId = urlParams.get('join');
+		const joinRoomId = urlParams.get('join');
 
 		if (joinRoomId) {
 			const roomIdRegex = /^[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/;
